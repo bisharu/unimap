@@ -1,0 +1,432 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'firebase_options.dart';
+import 'login.dart';
+import 'signup.dart';
+import 'homescreen.dart';
+
+  void main() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+
+    // 1. Tell Android to draw edge-to-edge behind system bars
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    // 2. Make the status bar purely transparent so your background colors show through perfectly
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+    ));
+    
+    runApp(const MyApp());
+  }
+
+  class MyApp extends StatelessWidget {
+    const MyApp({super.key});
+
+    @override
+    Widget build(BuildContext context) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(fontFamily: 'googlesans'),
+        home: const LoadingWrapper(
+          child: AuthWrapper(),
+        ),
+      );
+    }
+  }
+
+  class AuthWrapper extends StatelessWidget {
+    const AuthWrapper({super.key});
+
+    @override
+    Widget build(BuildContext context) {
+      return StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          // If the connection is active, check the auth state
+          if (snapshot.connectionState == ConnectionState.active) {
+            final User? user = snapshot.data;
+            if (user == null) {
+              return const WelcomeScreen();
+            } else {
+              // --- GUEST SESSION LIMIT LOGIC ---
+              if (user.isAnonymous) {
+                final lastSignIn = user.metadata.lastSignInTime;
+                if (lastSignIn != null) {
+                  // Define the session limit (e.g., 30 seconds)
+                  const sessionLimit = Duration(seconds: 30);
+                  final expiryTime = lastSignIn.add(sessionLimit);
+
+                  if (DateTime.now().isAfter(expiryTime)) {
+                    // Session expired, sign out immediately
+                    FirebaseAuth.instance.signOut();
+                    return const WelcomeScreen();
+                  }
+                }
+              }
+              // ----------------------------------
+              return const HomeScreen();
+            }
+          }
+          // While waiting for the auth state, show a blank or loading state
+          // (LoadingWrapper already handles the initial delay)
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        },
+      );
+    }
+  }
+
+  class WelcomeScreen extends StatelessWidget {
+    const WelcomeScreen({super.key});
+
+    @override
+    Widget build(BuildContext context) {
+      return Scaffold(
+        body: Stack(
+          children: [
+            // 1. BACKGROUND GRADIENT
+            Container(
+              width: double.infinity,
+              height: double.infinity,
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xFF293C60), Color(0xFF000000)],
+                  stops: [0.0, 0.6],
+                ),
+              ),
+            ),
+
+            // 2. TOP RIGHT IMAGE
+            Positioned(
+              top: 30,
+              right: 0,
+              child: Image.asset(
+                'assets/images/adbuLogo.png',
+                width: 145,
+                height: 145,
+              ),
+            ),
+
+            // 3. MAIN CONTENT
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 200.0),
+                  
+                  // Welcome Text
+                  TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0.0, end: 1.0),
+                    duration: const Duration(milliseconds: 1700),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, value, child) {
+                      return Transform.translate(
+                        offset: Offset(-40 * (1 - value), 0),
+                        child: Opacity(
+                          opacity: value,
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: ShaderMask(
+                      shaderCallback: (Rect bounds) => const LinearGradient(
+                        colors: [Color(0xFF9e4444), Color(0xFFd45b5b)],
+                      ).createShader(bounds),
+                      child: const Text(
+                        'Welcome to',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 35,
+                          fontWeight: FontWeight.w800,
+                          wordSpacing: 2.0,
+                        ),
+                      ),
+                    ),
+                  ),
+                  
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 100.0),
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0.0, end: 1.0),
+                      duration: const Duration(milliseconds: 1700),
+                      curve: Curves.easeOutExpo,
+                      builder: (context, value, child) {
+                        return Transform.translate(
+                          offset: Offset(0, 50 * (1 - value)),
+                          child: Opacity(
+                            opacity: value,
+                            child: child,
+                          ),
+                        );
+                      },
+                      child: ShaderMask(
+                        shaderCallback: (Rect bounds) {
+                          return const LinearGradient(
+                            colors: [Color(0xFF3b359c), Color(0xFF6157fa)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ).createShader(bounds);
+                        },
+                        child: const Text(
+                          'UniMap',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 65,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // AUTHENTICATION BUTTONS
+                  Center(
+                    child: Column(
+                      children: [
+                        _buildGradientButton(context, 'Login'),
+                        const SizedBox(height: 25),
+                        _buildGradientButton(context, 'Sign Up'),
+                        const SizedBox(height: 25),
+                        TextButton(
+                          onPressed: () async {
+                            try {
+                              await FirebaseAuth.instance.signInAnonymously();
+                              if (context.mounted) {
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => const HomeScreen()),
+                                );
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text("Guest Login Error: ${e.toString()}")),
+                                );
+                              }
+                            }
+                          },
+                          child: const Text(
+                            'Continue as Guest',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              decoration: TextDecoration.underline,
+                              fontSize: 21,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 60),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget _buildGradientButton(BuildContext context, String text) {
+      return Container(
+        width: 300,
+        height: 55,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF233587), Color(0xFF2975f0)],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+          ),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: ElevatedButton(
+          onPressed: () {
+            if (text == 'Login') {
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const Login()));
+            } else if (text == 'Sign Up') {
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const SignUp()));
+            }
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          ),
+          child: Text(
+            text,
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+    }
+  }
+
+  // Removed old MyApp code blocks as they are now in WelcomeScreen and AuthWrapper
+
+  class MyHomePage extends StatefulWidget {
+    const MyHomePage({super.key, required this.title});
+
+    // This widget is the home page of your application. It is stateful, meaning
+    // that it has a State object (defined below) that contains fields that affect
+    // how it looks.
+
+    // This class is the configuration for the state. It holds the values (in this
+    // case the title) provided by the parent (in this case the App widget) and
+    // used by the build method of the State. Fields in a Widget subclass are
+    // always marked "final".
+
+    final String title;
+
+    @override
+    State<MyHomePage> createState() => _MyHomePageState();  
+  }
+
+  class _MyHomePageState extends State<MyHomePage> {  
+    int _counter = 0;
+
+    void _incrementCounter() {
+      setState(() {
+        // This call to setState tells the Flutter framework that something has
+        // changed in this State, which causes it to rerun the build method below
+        // so that the display can reflect the updated values. If we changed
+        // _counter without calling setState(), then the build method would not be
+        // called again, and so nothing would appear to happen.
+        _counter++;
+      });
+    }
+
+    @override
+    Widget build(BuildContext context) {
+      // This method is rerun every time setState is called, for instance as done
+      // by the _incrementCounter method above.
+      //
+      // The Flutter framework has been optimized to make rerunning build methods
+      // fast, so that you can just rebuild anything that needs updating rather
+      // than having to individually change instances of widgets.
+      return Scaffold(
+        appBar: AppBar(
+          // TRY THIS: Try changing the color here to a specific color (to
+          // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
+          // change color while the other colors stay the same.
+          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+          // Here we take the value from the MyHomePage object that was created by
+          // the App.build method, and use it to set our appbar title.
+          title: Text(widget.title),
+        ),
+        body: Center(
+          // Center is a layout widget. It takes a single child and positions it
+          // in the middle of the parent.
+          child: Column(
+            // Column is also a layout widget. It takes a list of children and
+            // arranges them vertically. By default, it sizes itself to fit its
+            // children horizontally, and tries to be as tall as its parent.
+            //
+            // Column has various properties to control how it sizes itself and
+            // how it positions its children. Here we use mainAxisAlignment to
+            // center the children vertically; the main axis here is the vertical
+            // axis because Columns are vertical (the cross axis would be
+            // horizontal).
+            //
+            // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
+            // action in the IDE, or press "p" in the console), to see the
+            // wireframe for each widget.
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('You have pushed the button this many times:'),
+              Text(
+                '$_counter',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ],
+          ),
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: _incrementCounter,
+          tooltip: 'Increment',
+          child: const Icon(Icons.add),
+        ),
+      );
+    }
+  }
+
+// --- LOADING SCREEN WRAPPER ---
+class LoadingWrapper extends StatefulWidget {
+  final Widget child;
+  const LoadingWrapper({super.key, required this.child});
+
+  @override
+  State<LoadingWrapper> createState() => _LoadingWrapperState();
+}
+
+class _LoadingWrapperState extends State<LoadingWrapper> {
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Delay to simulate loading and show the beautiful splash text
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 1400),
+            curve: Curves.easeOutExpo,
+            builder: (context, value, child) {
+              return Transform.scale(
+                scale: 0.8 + (0.2 * value), // Slight elegant scale-up
+                child: Opacity(
+                  opacity: value,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min, // Keep contents compactly centered
+                    children: [
+                      // Placeholder Logo (until unimap_logo.png is added to assets/images/)
+                      const Icon(
+                        Icons.map_rounded,
+                        size: 180,
+                        color: Color(0xFF1E5D6A),
+                      ),
+                      const SizedBox(height: 25), // Spacing between logo and text
+                      const Text(
+                        'UniMap',
+                        style: TextStyle(
+                          fontFamily: 'googlesans', // Switching to Google Sans
+                          fontSize: 55, // Slightly smaller to match the thick font visually
+                          fontWeight: FontWeight.w800,
+                          color: Colors.black, // Dark ink
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
+    // Content goes to the main screen smoothly instantly after delay
+    return widget.child;
+  }
+}
