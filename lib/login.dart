@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'homescreen.dart';
 import 'profile_screens.dart';
+import 'utils.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -15,35 +16,7 @@ class _LoginState extends State<Login> {
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  String? _validateId(String id) {
-    id = id.toUpperCase();
-    if (!id.startsWith('DC')) {
-      return 'Invalid ID';//ID must start with "DC"
-    }
-    if (id.length > 13) {
-      return 'Invalid ID';//ID cannot exceed 13 characters
-    }
-    if (id.length < 6) {
-      return 'Invalid ID';//ID is too short (needs DC + 4 digits)
-    }
-
-    final lastFour = id.substring(id.length - 4);
-    final numericValue = int.tryParse(lastFour);
-
-    if (numericValue == null || !RegExp(r'^\d{4}$').hasMatch(lastFour)) {
-      return 'Invalid ID';//Last 4 characters must be digits
-    }
-
-    if (numericValue < 0 || numericValue > 100) {
-      return 'Invalid ID'; //Last 4 digits must be between 0000 and 0100
-    }
-
-    if (!RegExp(r'^[A-Z0-9]+$').hasMatch(id)) {
-      return 'Invalid ID'; //ID can only contain uppercase letters and numbers
-    }
-
-    return null;
-  }
+  String? _validateId(String id) => UniUtils.validateStudentId(id);
 
   Future<void> _handleLogin() async {
     final id = _idController.text.trim().toUpperCase();

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'login.dart';
+import 'utils.dart';
 
 class SignUp extends StatefulWidget {
   const SignUp({super.key});
@@ -19,35 +20,7 @@ class _SignUpState extends State<SignUp> {
   bool _isPasswordVisible = false;
   bool _isConfirmPasswordVisible = false;
 
-  String? _validateId(String id) {
-    id = id.toUpperCase();
-    if (!id.startsWith('DC')) {
-      return 'ID must start with "DC"';
-    }
-    if (id.length > 13) {
-      return 'ID cannot exceed 13 characters';
-    }
-    if (id.length < 6) {
-      return 'ID is too short (needs DC + 4 digits)';
-    }
-
-    final lastFour = id.substring(id.length - 4);
-    final numericValue = int.tryParse(lastFour);
-
-    if (numericValue == null || !RegExp(r'^\d{4}$').hasMatch(lastFour)) {
-      return 'Last 4 characters must be digits';
-    }
-
-    if (numericValue < 0 || numericValue > 100) {
-      return 'Last 4 digits must be between 0000 and 0100';
-    }
-
-    if (!RegExp(r'^[A-Z0-9]+$').hasMatch(id)) {
-      return 'ID can only contain uppercase letters and numbers';
-    }
-
-    return null;
-  }
+  String? _validateId(String id) => UniUtils.validateStudentId(id);
 
   Future<void> _handleSignUp() async {
     final name = _nameController.text.trim();
@@ -213,11 +186,8 @@ class _SignUpState extends State<SignUp> {
                       onChanged: (val) {
                         if (val.isEmpty) return;
                         
-                        // Capitalize first letter of each word
-                        String titleCase = val.split(' ').map((word) {
-                          if (word.isEmpty) return word;
-                          return word[0].toUpperCase() + word.substring(1);
-                        }).join(' ');
+                        // Capitalize first letter of each word using utility
+                        String titleCase = UniUtils.toTitleCase(val);
                         
                         if (val != titleCase) {
                           final selection = _nameController.selection;

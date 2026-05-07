@@ -24,28 +24,44 @@ class ProfileHeader extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.only(top: topPadding + 10, bottom: 20, left: 16),
-      decoration: const BoxDecoration(
-        color: Color(0xFFE0DFD5), // Light beige from design
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(30),
-          bottomRight: Radius.circular(30),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FA), // Cleaner off-white
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(32),
+          bottomRight: Radius.circular(32),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            onPressed: onBack ?? () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black, size: 22),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4),
+              ],
+            ),
+            child: IconButton(
+              onPressed: onBack ?? () => Navigator.pop(context),
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black, size: 18),
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 16),
           Text(
             title,
             style: const TextStyle(
               fontFamily: 'googlesans',
-              fontSize: 23, // Set to 23px as requested
-              fontWeight: FontWeight.w500,
-              color: Colors.black,
+              fontSize: 23,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1E3A5F),
             ),
           ),
         ],
@@ -742,19 +758,71 @@ class TermsAndConditionsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const ProfileHeader(title: 'Terms & Conditions'),
-          const SizedBox(height: 80),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 32),
-            child: Text(
-              'Text.....',
-              style: TextStyle(
-                fontFamily: 'googlesans',
-                fontSize: 18,
-                color: Colors.black,
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildSectionTitle('1. Acceptance of Terms'),
+                  _buildSectionText(
+                      'By accessing and using UniMap, you agree to be bound by these Terms and Conditions. If you do not agree to these terms, please do not use the application.'),
+                  const SizedBox(height: 24),
+                  _buildSectionTitle('2. User Conduct'),
+                  _buildSectionText(
+                      'Users are expected to use UniMap responsibly. Any attempt to disrupt the service, scrape data without permission, or use the app for illegal activities is strictly prohibited.'),
+                  const SizedBox(height: 24),
+                  _buildSectionTitle('3. Privacy Policy'),
+                  _buildSectionText(
+                      'Your privacy is important to us. Please refer to our Privacy Policy to understand how we collect, use, and protect your data.'),
+                  const SizedBox(height: 24),
+                  _buildSectionTitle('4. Limitation of Liability'),
+                  _buildSectionText(
+                      'UniMap is provided "as is" without any warranties. We are not liable for any damages arising from the use of this application.'),
+                  const SizedBox(height: 40),
+                  const Center(
+                    child: Text(
+                      'Last updated: May 2026',
+                      style: TextStyle(
+                        fontFamily: 'googlesans',
+                        fontSize: 12,
+                        color: Colors.black38,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontFamily: 'googlesans',
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Color(0xFF1E3A5F),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionText(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontFamily: 'googlesans',
+        fontSize: 14,
+        color: Colors.black87,
+        height: 1.5,
       ),
     );
   }
@@ -772,263 +840,160 @@ class FeedbackBottomSheet extends StatefulWidget {
 }
 
 class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
-  // null means show options, string means show details for that option
   String? _selectedFeedbackType;
   bool _isLoading = true;
+  final TextEditingController _feedbackController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    // Simulate loading options
-    Future.delayed(const Duration(milliseconds: 1000), () {
+    Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) setState(() => _isLoading = false);
     });
   }
 
   @override
+  void dispose() {
+    _feedbackController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    bool isDetail = _selectedFeedbackType != null;
-    
-    // Bottom padding for keyboard if on detail screen
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
-    return Container(
-      // Increase height slightly when keyboard is open
-      height: MediaQuery.of(context).size.height * (isDetail ? 0.45 : 0.7) + bottomInset,
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(40),
-          topRight: Radius.circular(40),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Column(
         children: [
-          const SizedBox(height: 12),
-          Center(
-            child: Container(
-              width: 60,
-              height: 6,
-              decoration: BoxDecoration(
-                color: const Color(0xFF42C2FF), // Cyan handle from design
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-          ),
-          
-          if (isDetail)
-             // Detail View Header
-             Padding(
-               padding: const EdgeInsets.fromLTRB(32, 40, 32, 0),
-               child: Row(
-                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                 children: [
-                   Expanded(
-                     child: Text(
-                       _selectedFeedbackType!,
-                       style: const TextStyle(
-                         fontFamily: 'googlesans',
-                         fontSize: 28,
-                         fontWeight: FontWeight.bold,
-                         color: Colors.black,
-                       ),
-                     ),
-                   ),
-                   IconButton(
-                     onPressed: () => setState(() => _selectedFeedbackType = null), 
-                     icon: const Icon(Icons.close_rounded, size: 28, color: Colors.black),
-                   ),
-                 ],
-               ),
-             )
-          else
-             // Options View Header
-             const Padding(
-               padding: EdgeInsets.fromLTRB(32, 40, 32, 40),
-               child: Text(
-                 'Feedback',
-                 style: TextStyle(
-                   fontFamily: 'googlesans',
-                   fontSize: 32,
-                   fontWeight: FontWeight.w500,
-                   color: Colors.black,
-                 ),
-               ),
-             ),
-
-          // Content Box
+          const ProfileHeader(title: 'Feedback'),
           Expanded(
-            child: _isLoading && !isDetail 
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    children: [
-                      const Skeleton(width: double.infinity, height: 110, borderRadius: 24),
-                      const SizedBox(height: 32),
-                      const Skeleton(width: double.infinity, height: 110, borderRadius: 24),
-                    ],
-                  ),
-                )
-              : AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  child: isDetail ? _buildDetailView() : _buildOptionsView(),
-                ),
-          ),
-          
-          if (isDetail) SizedBox(height: bottomInset > 0 ? bottomInset : 20),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOptionsView() {
-    return Padding(
-      key: const ValueKey('optionsView'),
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        children: [
-          _feedbackCard(
-            icon: Icons.report_gmailerrorred_rounded,
-            title: 'Report an issue',
-            description: 'Tell us if something is unusual or not working properly',
-          ),
-          const SizedBox(height: 32),
-          _feedbackCard(
-            icon: Icons.lightbulb_outline_rounded,
-            title: 'Suggest any adjustments',
-            description: 'Share your ideas on how we can improve further',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDetailView() {
-    return Padding(
-      key: const ValueKey('detailView'),
-      padding: const EdgeInsets.all(24.0),
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(50),
-            border: Border.all(color: Colors.black12, width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              const Expanded(
-                child: TextField(
-                  decoration: InputDecoration(
-                    hintText: 'Tell us how we can improve',
-                    hintStyle: TextStyle(color: Colors.black38, fontSize: 16),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
-                  ),
-                ),
-              ),
-              Container(
-                decoration: const BoxDecoration(
-                  color: Color(0xFF6C9CFF), // Blue send button background
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  icon: const Icon(Icons.send_rounded, color: Colors.white),
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.volunteer_activism_rounded, color: Colors.white, size: 40),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'Thank you for helping us iterate\nand improve.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontFamily: 'googlesans',
-                                fontSize: 16,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                        backgroundColor: const Color(0xFF1E3A5F),
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                      ),
-                    );
-                    Navigator.pop(context); // Close the entire bottom sheet
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _feedbackCard({
-    required IconData icon,
-    required String title,
-    required String description,
-  }) {
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedFeedbackType = title;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: const Color(0xFFE8F6F8), // Light cyan from design
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.black, width: 1.2),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 44, color: Colors.black),
-            const SizedBox(width: 20),
-            Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
+                  const Text(
+                    "How can we improve?",
+                    style: TextStyle(
                       fontFamily: 'googlesans',
-                      fontSize: 22,
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black,
+                      color: Color(0xFF1E3A5F),
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    description,
-                    style: const TextStyle(
+                  const SizedBox(height: 8),
+                  const Text(
+                    "Your feedback helps us make UniMap better for everyone.",
+                    style: TextStyle(
                       fontFamily: 'googlesans',
-                      fontSize: 16,
-                      color: Colors.black87,
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  _feedbackOption(Icons.bug_report_rounded, "Report a Bug"),
+                  _feedbackOption(Icons.lightbulb_rounded, "Suggest a Feature"),
+                  _feedbackOption(Icons.star_rounded, "Rate the App"),
+                  _feedbackOption(Icons.help_rounded, "Other Issues"),
+                  const SizedBox(height: 60),
+                  if (_selectedFeedbackType != null) ...[
+                    Text(
+                      "Details for: $_selectedFeedbackType",
+                      style: const TextStyle(
+                        fontFamily: 'googlesans',
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1E3A5F),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _feedbackController,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: "Tell us more...",
+                        filled: true,
+                        fillColor: const Color(0xFFF1F4F9),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                  SizedBox(
+                    width: double.infinity,
+                    height: 56,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        final String text = _feedbackController.text.trim();
+                        if (text.isEmpty) return;
+
+                        try {
+                          final user = FirebaseAuth.instance.currentUser;
+                          await FirebaseFirestore.instance.collection('feedback').add({
+                            'text': text,
+                            'userId': user?.uid ?? 'anonymous',
+                            'timestamp': FieldValue.serverTimestamp(),
+                          });
+
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Thank you for your feedback!")),
+                            );
+                            Navigator.pop(context);
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Error: ${e.toString()}")),
+                            );
+                          }
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF6C63FF),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                      child: const Text(
+                        "Submit",
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _feedbackOption(IconData icon, String label) {
+    bool isSelected = _selectedFeedbackType == label;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: isSelected ? const Color(0xFFE1EBF5) : const Color(0xFFF1F4F9),
+        borderRadius: BorderRadius.circular(16),
+        border: isSelected ? Border.all(color: const Color(0xFF6C63FF), width: 1.5) : null,
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: const Color(0xFF1E3A5F)),
+        title: Text(
+          label,
+          style: const TextStyle(fontFamily: 'googlesans', fontWeight: FontWeight.w600),
         ),
+        trailing: Icon(
+          isSelected ? Icons.check_circle_rounded : Icons.arrow_forward_ios_rounded,
+          size: 18,
+          color: isSelected ? const Color(0xFF6C63FF) : Colors.black26,
+        ),
+        onTap: () {
+          setState(() {
+            _selectedFeedbackType = label;
+          });
+        },
       ),
     );
   }

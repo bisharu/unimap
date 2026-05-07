@@ -24,10 +24,10 @@ class Student extends UniUser {
   final String password;
 
   Student({
-    required String id,
+    required super.id,
     required this.name,
     required this.password,
-  }) : super(id: id, role: 'Student');
+  }) : super(role: 'Student');
 
   // Logic for diagram methods
   bool validateCredentials(String inputId, String inputPassword) {
@@ -56,10 +56,10 @@ class Faculty extends UniUser {
   final String password;
 
   Faculty({
-    required String id,
+    required super.id,
     required this.name,
     required this.password,
-  }) : super(id: id, role: 'Faculty');
+  }) : super(role: 'Faculty');
 
   @override
   Future<Map<String, double>> getCurrentLocation() async {
@@ -78,7 +78,7 @@ class Faculty extends UniUser {
 }
 
 class Guest extends UniUser {
-  Guest({required String id}) : super(id: id, role: 'Guest');
+  Guest({required super.id}) : super(role: 'Guest');
 
   void temporarySession() {
     // Logic for guest session limit (already implemented in main.dart)
@@ -147,21 +147,16 @@ class Room extends UniLocation {
   final int floorNo;
 
   Room({
-    required String lId,
-    required String lName,
-    required double x,
-    required double y,
-    required String description,
+    required super.lId,
+    required super.lName,
+    required super.x,
+    required super.y,
+    required super.description,
     required this.rNo,
     required this.rType,
     required this.capacity,
     required this.floorNo,
   }) : super(
-          lId: lId,
-          lName: lName,
-          x: x,
-          y: y,
-          description: description,
           isRoom: true,
         );
 
