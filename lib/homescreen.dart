@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -11,7 +12,9 @@ import 'package:flutter_compass/flutter_compass.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'widgets/indoor_map_widget.dart';
 import 'profile_screens.dart';
+import 'profile_page.dart';
 import 'skeleton.dart';
+import 'filter_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,11 +30,16 @@ class _HomeScreenState extends State<HomeScreen>
   bool _isSearchFocused = false;
   String _searchQuery = '';
   List<RoomSearchItem> _allRooms = [];
+  List<String> _recentSearches = [];
+  FilterResult? _activeFilter;
   bool _isFetchingLocation = false;
   bool _isInitializing = true;
   String? _userName;
   LatLng? _currentLocation;
-  final GlobalKey<IndoorMapWidgetState> _mapKey = GlobalKey();
+  int _selectedFloor = 0;
+  bool _isFloorMenuOpen = false;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<IndoorMapWidgetState> _mapKey = GlobalKey<IndoorMapWidgetState>();
 
   // Compass and Connectivity
   double _heading = 0;
@@ -40,6 +48,8 @@ class _HomeScreenState extends State<HomeScreen>
   StreamSubscription? _compassSubscription;
   StreamSubscription<Position>? _positionSubscription;
   bool _isTrackingLocation = false;
+  String? _selectedRoomName;
+  LatLng? _selectedRoomCentroid;
 
   @override
   void initState() {
@@ -74,10 +84,59 @@ class _HomeScreenState extends State<HomeScreen>
 
     // Simulate map/UI initialization
     Future.delayed(const Duration(milliseconds: 800), () {
-      if (mounted) setState(() => _isInitializing = false);
+      if (mounted) {
+        setState(() => _isInitializing = false);
+        _getCurrentLocation(); // Automatically get location on startup
+      }
     });
     _fetchUserName();
     _loadAllRoomsData();
+    _loadRecentSearches();
+  }
+
+  Future<void> _loadRecentSearches() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _recentSearches = prefs.getStringList('recent_searches') ?? [];
+      });
+    }
+  }
+
+  Future<void> _saveRecentSearch(String roomName) async {
+    if (roomName.isEmpty) return;
+    
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> updated = List.from(_recentSearches);
+    
+    // Remove if already exists to move it to the top
+    updated.remove(roomName);
+    updated.insert(0, roomName);
+    
+    // Keep only last 8 searches
+    if (updated.length > 8) {
+      updated.removeRange(8, updated.length);
+    }
+    
+    await prefs.setStringList('recent_searches', updated);
+    if (mounted) {
+      setState(() {
+        _recentSearches = updated;
+      });
+    }
+  }
+
+  Future<void> _removeRecentSearch(String roomName) async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> updated = List.from(_recentSearches);
+    updated.remove(roomName);
+    
+    await prefs.setStringList('recent_searches', updated);
+    if (mounted) {
+      setState(() {
+        _recentSearches = updated;
+      });
+    }
   }
 
   Future<void> _checkInitialConnectivity() async {
@@ -214,11 +273,19 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     try {
+      // 1. Accuracy Filtering: Get position with highest accuracy
       final Position position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
+          accuracy: LocationAccuracy.bestForNavigation,
+          timeLimit: Duration(seconds: 8),
         ),
       );
+      
+      // 5. Filter out stale or low-accuracy data (> 35m error)
+      if (position.accuracy > 35) {
+        debugPrint("Initial location accuracy low: ${position.accuracy}m");
+      }
+
       final LatLng newLocation = LatLng(position.latitude, position.longitude);
       setState(() {
         _isFetchingLocation = false;
@@ -232,13 +299,25 @@ class _HomeScreenState extends State<HomeScreen>
         _isTrackingLocation = true;
         _positionSubscription = Geolocator.getPositionStream(
           locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 1, // Update every 1 meter
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 0, // 4. Fused / Continuous updates for maximum smoothness
           ),
         ).listen((Position position) {
           if (mounted) {
+            // 5. Accuracy Filtering: Ignore points with very high error margins
+            if (position.accuracy > 35) return;
+
             setState(() {
-              _currentLocation = LatLng(position.latitude, position.longitude);
+              // 2. Exponential Moving Average Smoothing
+              // weight: 0.3 (new), 0.7 (old) to reduce marker "jumping"
+              if (_currentLocation == null) {
+                _currentLocation = LatLng(position.latitude, position.longitude);
+              } else {
+                const double weight = 0.3;
+                double lat = (position.latitude * weight) + (_currentLocation!.latitude * (1.0 - weight));
+                double lng = (position.longitude * weight) + (_currentLocation!.longitude * (1.0 - weight));
+                _currentLocation = LatLng(lat, lng);
+              }
             });
           }
         });
@@ -278,14 +357,43 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _showProfileMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _ProfileBottomSheet(
-        onSubScreenClosed: () => _showProfileMenu(context),
-      ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const ProfilePage()),
     );
+  }
+
+  Future<void> _openFilterScreen(BuildContext context) async {
+    _searchFocusNode.unfocus();
+    _scaffoldKey.currentState?.openEndDrawer();
+  }
+
+  void _applyFilter(FilterResult result) {
+    setState(() {
+      _activeFilter = result;
+      _searchQuery = result.displayLabel;
+      _searchController.text = result.displayLabel;
+      
+      // Directly switch floors while using filters
+      if (result.floor != null) {
+        _selectedFloor = result.floor!;
+        _mapKey.currentState?.setFloor(result.floor!);
+      } else if (result.type != null) {
+        final matchingRoom = _allRooms.firstWhere(
+          (r) => r.type.toLowerCase().contains(result.type!),
+          orElse: () => _allRooms.firstWhere((r) => r.floor == _selectedFloor, orElse: () => _allRooms.first),
+        );
+        
+        if (matchingRoom.floor != _selectedFloor) {
+          _selectedFloor = matchingRoom.floor;
+          _mapKey.currentState?.setFloor(matchingRoom.floor);
+        }
+      }
+    });
+    // Highlight matching rooms on the map
+    _mapKey.currentState?.setHighlight(result.type);
+    // Re-focus so keyboard comes back
+    if (mounted && _isSearchFocused) _searchFocusNode.requestFocus();
   }
 
   void _showQrScanner(BuildContext context) {
@@ -378,6 +486,33 @@ class _HomeScreenState extends State<HomeScreen>
                           if (rawValue != null && rawValue.isNotEmpty) {
                             scannerController.dispose();
                             Navigator.pop(ctx);
+
+                            // 3. QR Code Anchors (Format: UNIMAP_LOC:lat,lng,floor)
+                            if (rawValue.startsWith("UNIMAP_LOC:")) {
+                              try {
+                                final parts = rawValue.replaceFirst("UNIMAP_LOC:", "").split(",");
+                                if (parts.length >= 2) {
+                                  final lat = double.parse(parts[0]);
+                                  final lng = double.parse(parts[1]);
+                                  final int floor = parts.length > 2 ? int.parse(parts[2]) : _selectedFloor;
+                                  
+                                  final anchorLoc = LatLng(lat, lng);
+                                  setState(() {
+                                    _currentLocation = anchorLoc;
+                                    _selectedFloor = floor;
+                                  });
+                                  
+                                  _mapKey.currentState?.setFloor(floor);
+                                  _mapKey.currentState?.moveToLocation(anchorLoc, zoom: 21.0);
+                                  
+                                  _showLocationSnackbar('📍 Location anchored to precise spot');
+                                  return;
+                                }
+                              } catch (e) {
+                                debugPrint("Error parsing QR anchor: $e");
+                              }
+                            }
+
                             // Search for the scanned value on the map
                             setState(() {
                               _searchQuery = rawValue;
@@ -482,11 +617,49 @@ class _HomeScreenState extends State<HomeScreen>
       systemNavigationBarColor: Colors.transparent,
     ));
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      resizeToAvoidBottomInset: false,
-      body: Stack(
-        children: [
+    return PopScope(
+      canPop: !_isSearchFocused && _activeFilter == null && _selectedRoomName == null,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+
+        setState(() {
+          if (_isSearchFocused) {
+            // 1. Close Search Overlay
+            _isSearchFocused = false;
+            _searchFocusNode.unfocus();
+            _searchController.clear();
+            _searchQuery = '';
+            _mapKey.currentState?.setHighlight(null);
+          } else if (_activeFilter != null) {
+            // 2. Clear Active Filter
+            _activeFilter = null;
+            _mapKey.currentState?.setHighlight(null);
+            _searchQuery = '';
+            _searchController.clear();
+          } else if (_selectedRoomName != null) {
+            // 3. Clear Room Selection
+            _selectedRoomName = null;
+            _selectedRoomCentroid = null;
+            _searchQuery = '';
+            _searchController.clear();
+          }
+        });
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: Colors.transparent,
+        resizeToAvoidBottomInset: false,
+        endDrawer: Drawer(
+          width: MediaQuery.of(context).size.width * 0.85,
+          child: FilterScreen(
+            onResult: (result) {
+              _scaffoldKey.currentState?.closeEndDrawer();
+              _applyFilter(result);
+            },
+          ),
+        ),
+        body: Stack(
+          children: [
           // ── 1. INDOOR MAP ──────────────────────────────────────────────────
           Positioned.fill(
             child: GestureDetector(
@@ -499,6 +672,12 @@ class _HomeScreenState extends State<HomeScreen>
                 currentFloor: 0,
                 userLocation: _currentLocation,
                 heading: _heading,
+                onRoomSelected: (name, centroid) {
+                  setState(() {
+                    _selectedRoomName = name;
+                    _selectedRoomCentroid = centroid;
+                  });
+                },
               ),
             ),
           ),
@@ -577,8 +756,126 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             ),
-        ],
+          
+          // ── 6. DIRECTIONS BUTTON ───────────────────────────────────────────
+          if (!_isSearchFocused && _selectedRoomName != null)
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 16,
+              left: 16,
+              right: 16,
+              child: _buildDirectionsPanel(),
+            ),
+
+          // ── 7. FLOOR SELECTOR (Top Right - FAB Menu) ──────────────────────
+          if (!_isSearchFocused)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 80,
+              right: 16,
+              child: _buildFloorFabMenu(),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildFloorFabMenu() {
+    final floors = [
+      {'label': '4th Floor', 'value': 4},
+      {'label': '3rd Floor', 'value': 3},
+      {'label': '2nd Floor', 'value': 2},
+      {'label': '1st Floor', 'value': 1},
+      {'label': 'Ground Floor', 'value': 0},
+    ];
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (_isFloorMenuOpen)
+          ...floors.map((floor) {
+            bool isSelected = _selectedFloor == floor['value'];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _selectedFloor = floor['value'] as int;
+                    _isFloorMenuOpen = false;
+                  });
+                  _mapKey.currentState?.setFloor(floor['value'] as int);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isSelected ? const Color(0xFF5B5FEF) : Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.15),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    floor['label'] as String,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : const Color(0xFF1E3A5F),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      fontFamily: 'googlesans',
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _isFloorMenuOpen = !_isFloorMenuOpen;
+            });
+          },
+          child: Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: _isFloorMenuOpen
+                ? const Icon(Icons.close_rounded, color: Color(0xFF1E3A5F), size: 26)
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        _selectedFloor == 0 ? 'G' : _selectedFloor.toString(),
+                        style: const TextStyle(
+                          color: Color(0xFF1E3A5F),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                          fontFamily: 'googlesans',
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      const Icon(
+                        Icons.layers_outlined,
+                        color: Color(0xFF1E3A5F),
+                        size: 14,
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -713,9 +1010,21 @@ class _HomeScreenState extends State<HomeScreen>
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
 
-    final searchResults = _searchQuery.isEmpty
-        ? <RoomSearchItem>[]
-        : _performSemanticSearch(_searchQuery);
+    // Apply active filter on top of semantic search
+    List<RoomSearchItem> searchResults;
+    if (_searchQuery.isEmpty && _activeFilter == null) {
+      searchResults = [];
+    } else if (_activeFilter != null) {
+      // Filter-driven results (ignore text query, filter by floor+type)
+      searchResults = _allRooms.where((room) {
+        final floorMatch = _activeFilter!.floor == null || room.floor == _activeFilter!.floor;
+        final typeMatch  = _activeFilter!.type  == null || room.type.toLowerCase().contains(_activeFilter!.type!);
+        return floorMatch && typeMatch;
+      }).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+    } else {
+      searchResults = _performSemanticSearch(_searchQuery);
+    }
 
     return Material(
       color: Colors.white,
@@ -752,37 +1061,68 @@ class _HomeScreenState extends State<HomeScreen>
                     controller: _searchController,
                     autofocus: true,
                     textAlignVertical: TextAlignVertical.center,
-                    onChanged: (val) => setState(() => _searchQuery = val),
+                    onChanged: (val) {
+                      setState(() {
+                        _searchQuery = val;
+                        if (_activeFilter != null) {
+                          _activeFilter = null;
+                          // Remove highlight when user types manually
+                          _mapKey.currentState?.setHighlight(null);
+                        }
+                      });
+                    },
                     style: const TextStyle(
                       fontFamily: 'googlesans',
                       fontSize: 15,
                       color: Colors.black87,
                     ),
                     decoration: InputDecoration(
-                      hintText: 'Search location by name, room no., ...',
+                      hintText: 'Search location',
                       hintStyle: TextStyle(
                         fontFamily: 'googlesans',
                         color: Colors.black.withOpacity(0.38),
-                        fontSize: 14,
+                        fontSize: 18,
                       ),
                       border: InputBorder.none,
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                      suffixIcon: _searchQuery.isNotEmpty
+                      suffixIcon: (_searchQuery.isNotEmpty || _activeFilter != null)
                           ? IconButton(
                               icon: const Icon(Icons.close_rounded, color: Colors.black45, size: 20),
                               onPressed: () {
                                 _searchController.clear();
-                                setState(() => _searchQuery = '');
+                                setState(() {
+                                  _searchQuery = '';
+                                  _activeFilter = null;
+                                });
+                                _mapKey.currentState?.setHighlight(null);
                               },
                             )
                           : null,
                     ),
                   ),
                 ),
-                // Menu icon (matching the wireframe)
-                IconButton(
-                  icon: const Icon(Icons.menu_rounded, color: Colors.black87, size: 24),
-                  onPressed: () => _showProfileMenu(context),
+                // Filter icon
+                Stack(
+                  alignment: Alignment.topRight,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.tune_rounded, color: Colors.black87, size: 22),
+                      onPressed: () => _openFilterScreen(context),
+                    ),
+                    if (_activeFilter != null)
+                      Positioned(
+                        right: 8,
+                        top: 8,
+                        child: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF6C63FF),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ],
             ),
@@ -790,14 +1130,74 @@ class _HomeScreenState extends State<HomeScreen>
 
           const Divider(height: 1, color: Color(0xFFEEEEEE)),
 
+          // ── ACTIVE FILTER CHIP ───────────────────────────────────────────────
+          if (_activeFilter != null)
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6C63FF).withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFF6C63FF).withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.filter_list_rounded, size: 14, color: Color(0xFF6C63FF)),
+                        const SizedBox(width: 6),
+                        Text(
+                          _activeFilter!.displayLabel,
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6C63FF),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _activeFilter = null;
+                              _searchQuery = '';
+                              _searchController.clear();
+                            });
+                            _mapKey.currentState?.setHighlight(null);
+                          },
+                          child: const Icon(Icons.close_rounded, size: 14, color: Color(0xFF6C63FF)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           // ── CONTENT AREA ─────────────────────────────────────────────────────
           Expanded(
-            child: _searchQuery.isEmpty
-                // Zero state: suggestion chips
+            child: (_searchQuery.isEmpty && _activeFilter == null)
+                // Zero state: suggestion chips + recent searches
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 12),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        child: Text(
+                          'SUGGESTED SEARCHES',
+                          style: TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black45,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -810,18 +1210,77 @@ class _HomeScreenState extends State<HomeScreen>
                           ],
                         ),
                       ),
+                      
+                      if (_recentSearches.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+                          child: Text(
+                            'RECENT SEARCHES',
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black45,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: ListView.builder(
+                            padding: EdgeInsets.zero,
+                            itemCount: _recentSearches.length,
+                            itemBuilder: (context, index) {
+                              final query = _recentSearches[index];
+                              return ListTile(
+                                leading: const Icon(Icons.history_rounded, color: Colors.black38, size: 20),
+                                title: Text(
+                                  query,
+                                  style: const TextStyle(
+                                    fontFamily: 'googlesans',
+                                    fontSize: 14.5,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.close_rounded, size: 18, color: Colors.black26),
+                                  onPressed: () => _removeRecentSearch(query),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                                dense: true,
+                                onTap: () {
+                                  _searchController.text = query;
+                                  setState(() {
+                                    _searchQuery = query;
+                                    _activeFilter = null; // clear filter when typing
+                                  });
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ],
                   )
-                // Typing state: search results
+                // Active filter or typing state: show results
                 : searchResults.isEmpty
                     ? Center(
-                        child: Text(
-                          'No rooms found for "$_searchQuery"',
-                          style: const TextStyle(
-                            fontFamily: 'googlesans',
-                            color: Colors.black54,
-                            fontSize: 14,
-                          ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.search_off_rounded, size: 48, color: Colors.black12),
+                            const SizedBox(height: 12),
+                            Text(
+                              _activeFilter != null
+                                  ? 'No locations found for "${_activeFilter!.displayLabel}"'
+                                  : 'No rooms found for "$_searchQuery"',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontFamily: 'googlesans',
+                                color: Colors.black54,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
                         ),
                       )
                     : ListView.builder(
@@ -848,20 +1307,28 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildSuggestionChip(String label) {
-    return Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontFamily: 'googlesans',
-          fontSize: 13,
-          color: Colors.black87,
+    return GestureDetector(
+      onTap: () {
+        _searchController.text = label;
+        setState(() {
+          _searchQuery = label;
+        });
+      },
+      child: Container(
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontFamily: 'googlesans',
+            fontSize: 13,
+            color: Colors.black87,
+          ),
         ),
       ),
     );
@@ -891,11 +1358,114 @@ class _HomeScreenState extends State<HomeScreen>
             _isSearchFocused = false;
             _searchQuery = room.name; // Keep the selected room name in the bar
             _searchController.text = room.name;
+            _selectedRoomName = room.name;
+            _selectedRoomCentroid = room.centroid;
+            _selectedFloor = room.floor; // Update the floor selector
           });
+
+          // Save to recent searches
+          _saveRecentSearch(room.name);
 
           // Tell the map to jump to this room
           _mapKey.currentState?.selectAndFocusRoom(room.floor, room.name, room.centroid);
         },
+      ),
+    );
+  }
+
+  Widget _buildDirectionsPanel() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 15,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.location_on_rounded, color: Color(0xFF6C63FF)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _selectedRoomName ?? '',
+                      style: const TextStyle(
+                        fontFamily: 'googlesans',
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const Text(
+                      'Assam Don Bosco University',
+                      style: TextStyle(
+                        fontFamily: 'googlesans',
+                        fontSize: 12,
+                        color: Colors.black45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.black38),
+                onPressed: () {
+                  setState(() {
+                    _selectedRoomName = null;
+                    _selectedRoomCentroid = null;
+                  });
+                  _mapKey.currentState?.setRoute(null);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                if (_selectedRoomCentroid != null) {
+                  _mapKey.currentState?.showDirectionsTo(_selectedRoomCentroid!);
+                }
+              },
+              icon: const Icon(Icons.directions_rounded, color: Colors.white),
+              label: const Text(
+                'Directions',
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  color: Colors.white,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6C63FF),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -917,7 +1487,7 @@ class _HomeScreenState extends State<HomeScreen>
           borderRadius: BorderRadius.circular(30),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.10),
+              color: Colors.black.withValues(alpha: 0.10),
               blurRadius: 12,
               offset: const Offset(0, 4),
             ),
@@ -930,12 +1500,12 @@ class _HomeScreenState extends State<HomeScreen>
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                _searchQuery.isEmpty ? 'Search location by name, room no., e...' : _searchQuery,
+                _searchQuery.isEmpty ? 'Search location' : _searchQuery,
                 style: TextStyle(
                   fontFamily: 'googlesans',
-                  fontSize: 13.5,
+                  fontSize: 20,
                   color: _searchQuery.isEmpty
-                      ? Colors.black.withOpacity(0.40)
+                      ? Colors.black.withValues(alpha: 0.40)
                       : Colors.black87,
                 ),
                 overflow: TextOverflow.ellipsis,
@@ -950,7 +1520,7 @@ class _HomeScreenState extends State<HomeScreen>
                 height: 36,
                 margin: const EdgeInsets.only(right: 4),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF5B5FEF).withOpacity(0.10),
+                  color: const Color(0xFF5B5FEF).withValues(alpha: 0.10),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
@@ -969,7 +1539,7 @@ class _HomeScreenState extends State<HomeScreen>
                 height: 36,
                 margin: const EdgeInsets.only(right: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.7),
+                  color: Colors.black.withValues(alpha: 0.7),
                   shape: BoxShape.circle,
                 ),
                 child: Center(

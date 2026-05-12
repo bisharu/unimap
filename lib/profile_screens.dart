@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 import 'skeleton.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ class ProfileHeader extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -46,7 +46,7 @@ class ProfileHeader extends StatelessWidget {
               color: Colors.white,
               shape: BoxShape.circle,
               boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4),
               ],
             ),
             child: IconButton(
@@ -113,7 +113,7 @@ class ProfileValueDisplay extends StatelessWidget {
                 borderRadius: BorderRadius.circular(30),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 8,
                     offset: const Offset(0, 4),
                   ),
@@ -148,6 +148,7 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
   bool _isLoading = true;
   String _name = 'Loading...';
   String _studentId = 'Loading...';
+  String _email = 'Loading...';
 
   @override
   void initState() {
@@ -168,6 +169,7 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
           setState(() {
             _name = doc.data()?['name'] ?? 'N/A';
             _studentId = doc.data()?['studentId'] ?? 'N/A';
+            _email = doc.data()?['email'] ?? 'N/A';
             _isLoading = false;
           });
         } else {
@@ -196,9 +198,11 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
               child: Column(
                 children: [
                   ProfileValueDisplay(label: 'Name', value: _name, isLoading: _isLoading),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
+                  ProfileValueDisplay(label: 'Email', value: _email, isLoading: _isLoading),
+                  const SizedBox(height: 20),
                   ProfileValueDisplay(label: 'ID', value: _studentId, isLoading: _isLoading),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
                   ProfileValueDisplay(
                       label: 'Password', value: '********', isPassword: true, isLoading: _isLoading),
                   const Spacer(),
@@ -222,7 +226,7 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
                             borderRadius: BorderRadius.circular(24),
                           ),
                           elevation: 6,
-                          shadowColor: const Color(0xFF6C63FF).withOpacity(0.4),
+                          shadowColor: const Color(0xFF6C63FF).withValues(alpha: 0.4),
                         ),
                         child: const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -255,7 +259,7 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SCREEN 2: PASSWORD CHANGE
+// SCREEN 2: PASSWORD CHANGE (FIREBASE RESET FLOW)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class PasswordChangeScreen extends StatefulWidget {
@@ -266,477 +270,257 @@ class PasswordChangeScreen extends StatefulWidget {
 }
 
 class _PasswordChangeScreenState extends State<PasswordChangeScreen> {
+  final PageController _pageController = PageController();
   final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _otpController = TextEditingController();
-  Timer? _timer;
-  int _secondsRemaining = 120;
-  bool _isTimerRunning = false;
-
-  void _startTimer() {
-    setState(() {
-      _secondsRemaining = 120;
-      _isTimerRunning = true;
-    });
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          if (_secondsRemaining > 0) {
-            _secondsRemaining--;
-          } else {
-            _isTimerRunning = false;
-            _timer?.cancel();
-          }
-        });
-      }
-    });
-  }
-
-  String _formatTime(int seconds) {
-    int minutes = seconds ~/ 60;
-    int remainingSeconds = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${remainingSeconds.toString().padLeft(2, '0')}';
-  }
+  
+  int _currentStep = 0; // 0: Confirm, 1: Success
+  bool _isLoading = false;
+  String? _registeredEmail;
+  bool _fetchingEmail = true;
 
   @override
+  void initState() {
+    super.initState();
+    _fetchRegisteredEmail();
+  }
+
+  Future<void> _fetchRegisteredEmail() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+        if (doc.exists && mounted) {
+          final email = doc.data()?['email'];
+          if (email != null && email.toString().contains('@')) {
+            setState(() {
+              _registeredEmail = email.toString();
+              _emailController.text = email.toString();
+            });
+          }
+        }
+      } catch (e) {
+        debugPrint("Error fetching email: $e");
+      }
+    }
+    if (mounted) setState(() => _fetchingEmail = false);
+  }
+  
+  @override
   void dispose() {
+    _pageController.dispose();
     _emailController.dispose();
-    _otpController.dispose();
-    _timer?.cancel();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
-      ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 40),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: RichText(
-                text: const TextSpan(
-                  style: TextStyle(
-                    fontFamily: 'googlesans',
-                    fontSize: 28,
-                    color: Colors.black,
-                    height: 1.2,
-                  ),
-                  children: [
-                    TextSpan(text: 'Share your '),
-                    TextSpan(
-                        text: 'Email\n',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
-                    TextSpan(text: 'to get '),
-                    TextSpan(
-                        text: 'OTP',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 60),
-            
-            // EMAIL FIELD
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(50),
-                  border: Border.all(color: Colors.black12, width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _emailController,
-                        decoration: const InputDecoration(
-                          hintText: 'Enter your email address',
-                          hintStyle: TextStyle(color: Colors.black38, fontSize: 16),
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 16),
-                        ),
-                      ),
-                    ),
-                    Container(
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF6C9CFF),
-                        shape: BoxShape.circle,
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.send_rounded, color: Colors.white),
-                        onPressed: () {
-                          if (_emailController.text.isNotEmpty) {
-                            _startTimer();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.mark_email_read_rounded, color: Colors.white, size: 40),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      'Link shared to ${_emailController.text}',
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                        fontFamily: 'googlesans',
-                                        fontSize: 16,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                backgroundColor: const Color(0xFF1E3A5F),
-                                behavior: SnackBarBehavior.floating,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                margin: const EdgeInsets.fromLTRB(16, 0, 16, 40),
-                              ),
-                            );
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 32),
-            
-            // OTP FIELD
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(50),
-                      border: Border.all(color: Colors.black12, width: 1.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _otpController,
-                            keyboardType: TextInputType.number,
-                            maxLength: 6,
-                            decoration: const InputDecoration(
-                              hintText: 'Enter the OTP',
-                              hintStyle: TextStyle(color: Colors.black38, fontSize: 16),
-                              border: InputBorder.none,
-                              counterText: "",
-                              contentPadding: EdgeInsets.symmetric(horizontal: 16),
-                            ),
-                          ),
-                        ),
-                        if (_isTimerRunning)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 12),
-                            child: Text(
-                              _formatTime(_secondsRemaining),
-                              style: const TextStyle(
-                                color: Color(0xFF6C9CFF),
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  if (!_isTimerRunning && _secondsRemaining == 0)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 20, top: 8),
-                      child: TextButton(
-                        onPressed: _startTimer,
-                        child: const Text('Resend OTP'),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 60),
-            
-            // VERIFY BUTTON
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 48),
-              child: SizedBox(
-                width: double.infinity,
-                  child: ElevatedButton(
-                  onPressed: () {
-                    if (_otpController.text.isNotEmpty) {
-                       Navigator.push(
-                         context,
-                         MaterialPageRoute(builder: (context) => const SetNewPasswordScreen()),
-                       );
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF6C63FF),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    elevation: 4,
-                  ),
-                  child: const Text(
-                    'Verify OTP',
-                    style: TextStyle(
-                      fontFamily: 'googlesans',
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+  void _nextStep() {
+    if (_currentStep < 1) {
+      setState(() => _currentStep++);
+      _pageController.animateToPage(
+        _currentStep,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  void _prevStep() {
+    if (_currentStep > 0) {
+      setState(() => _currentStep--);
+      _pageController.animateToPage(
+        _currentStep,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  Future<void> _sendResetLink() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      _showError("Please enter a valid email address.");
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      _nextStep();
+    } on FirebaseAuthException catch (e) {
+      _showError(e.message ?? "Failed to send reset link.");
+    } catch (e) {
+      _showError("Error: ${e.toString()}");
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SCREEN 3: SET NEW PASSWORD
-// ─────────────────────────────────────────────────────────────────────────────
-
-class SetNewPasswordScreen extends StatefulWidget {
-  const SetNewPasswordScreen({super.key});
-
-  @override
-  State<SetNewPasswordScreen> createState() => _SetNewPasswordScreenState();
-}
-
-class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
-  final TextEditingController _passController = TextEditingController();
-  final TextEditingController _confirmPassController = TextEditingController();
-  bool _isPassVisible = false;
-  bool _isConfirmPassVisible = false;
-
-  @override
-  void dispose() {
-    _passController.dispose();
-    _confirmPassController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
+      body: Column(
+        children: [
+          ProfileHeader(
+            title: 'Change Password',
+            onBack: _currentStep > 0 ? _prevStep : null,
+          ),
+          Expanded(
+            child: PageView(
+              controller: _pageController,
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                _buildConfirmStep(),
+                _buildSuccessStep(),
+              ],
+            ),
+          ),
+        ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 40),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: RichText(
-                text: const TextSpan(
-                  style: TextStyle(
-                    fontFamily: 'googlesans',
-                    fontSize: 28,
-                    color: Colors.black,
-                    height: 1.2,
-                  ),
-                  children: [
-                    TextSpan(text: 'Set your '),
-                    TextSpan(
-                        text: 'New\n',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
-                    TextSpan(
-                        text: 'Password',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
-                  ],
-                ),
-              ),
+    );
+  }
+
+  Widget _buildStepContainer({
+    required String title,
+    required String subtitle,
+    required Widget child,
+    required String buttonText,
+    required VoidCallback onButtonPressed,
+    IconData? buttonIcon,
+  }) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontFamily: 'googlesans',
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1E3A5F),
             ),
-            const SizedBox(height: 60),
-            
-            // NEW PASSWORD FIELD
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(50),
-                  border: Border.all(color: Colors.black12, width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: TextField(
-                  controller: _passController,
-                  obscureText: !_isPassVisible,
-                  decoration: InputDecoration(
-                    hintText: 'New Password',
-                    hintStyle: const TextStyle(color: Colors.black38, fontSize: 16),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _isPassVisible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                        color: Colors.black38,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            subtitle,
+            style: const TextStyle(
+              fontFamily: 'googlesans',
+              fontSize: 16,
+              color: Colors.black54,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 48),
+          child,
+          const SizedBox(height: 60),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: _isLoading ? null : onButtonPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6C63FF),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                elevation: 4,
+                shadowColor: const Color(0xFF6C63FF).withValues(alpha: 0.3),
+              ),
+              child: _isLoading
+                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        buttonText,
+                        style: const TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
                       ),
-                      onPressed: () => setState(() => _isPassVisible = !_isPassVisible),
-                    ),
+                      if (buttonIcon != null) ...[
+                        const SizedBox(width: 8),
+                        Icon(buttonIcon, color: Colors.white, size: 20),
+                      ],
+                    ],
                   ),
-                ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfirmStep() {
+    String maskedEmail = "";
+    if (_registeredEmail != null) {
+      final parts = _registeredEmail!.split('@');
+      if (parts[0].length > 3) {
+        maskedEmail = "${parts[0].substring(0, 3)}***@${parts[1]}";
+      } else {
+        maskedEmail = "***@${parts[1]}";
+      }
+    }
+
+    return _buildStepContainer(
+      title: "Password Reset",
+      subtitle: _registeredEmail != null 
+        ? "We will send a secure password reset link to your registered email: $maskedEmail"
+        : "Enter your email address to receive a secure password reset link.",
+      buttonText: "Send Reset Link",
+      buttonIcon: Icons.send_rounded,
+      onButtonPressed: _sendResetLink,
+      child: _fetchingEmail 
+        ? const Center(child: CircularProgressIndicator())
+        : Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F4F9),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: TextField(
+              controller: _emailController,
+              readOnly: _registeredEmail != null,
+              keyboardType: TextInputType.emailAddress,
+              decoration: InputDecoration(
+                hintText: "Email Address",
+                border: InputBorder.none,
+                prefixIcon: const Icon(Icons.email_outlined, color: Color(0xFF1E3A5F)),
+                suffixIcon: _registeredEmail != null ? const Icon(Icons.verified_rounded, color: Colors.green, size: 20) : null,
               ),
             ),
-            
-            const SizedBox(height: 24),
-            
-            // CONFIRM PASSWORD FIELD
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(50),
-                  border: Border.all(color: Colors.black12, width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: TextField(
-                  controller: _confirmPassController,
-                  obscureText: !_isConfirmPassVisible,
-                  decoration: InputDecoration(
-                    hintText: 'Confirm Password',
-                    hintStyle: const TextStyle(color: Colors.black38, fontSize: 16),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _isConfirmPassVisible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                        color: Colors.black38,
-                      ),
-                      onPressed: () => setState(() => _isConfirmPassVisible = !_isConfirmPassVisible),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 60),
-            
-            // RESET BUTTON
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 48),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    final password = _passController.text;
-                    final confirmPassword = _confirmPassController.text;
+          ),
+    );
+  }
 
-                    if (password.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Please enter a new password')),
-                      );
-                      return;
-                    }
-
-                    if (password.length < 6) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Password must be at least 6 characters')),
-                      );
-                      return;
-                    }
-
-                    if (!RegExp(r'^(?=.*[a-zA-Z])(?=.*\d)').hasMatch(password)) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Password must contain both letters and numbers')),
-                      );
-                      return;
-                    }
-
-                    if (password != confirmPassword) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Passwords do not match')),
-                      );
-                      return;
-                    }
-
-                    if (password.isNotEmpty && password == confirmPassword) {
-                       ScaffoldMessenger.of(context).showSnackBar(
-                         SnackBar(
-                           content: const Text('Password reset successfully!'),
-                           backgroundColor: Colors.green.shade700,
-                           behavior: SnackBarBehavior.floating,
-                         ),
-                       );
-                       // Go back to profile or login
-                       Navigator.of(context).popUntil((route) => route.isFirst);
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF6C63FF),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    elevation: 4,
-                  ),
-                  child: const Text(
-                    'Reset Password',
-                    style: TextStyle(
-                      fontFamily: 'googlesans',
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
+  Widget _buildSuccessStep() {
+    return _buildStepContainer(
+      title: "Link Sent!",
+      subtitle: "A password reset link has been sent to ${_emailController.text}. \n\nPlease check your inbox (and spam folder) to set your new password.",
+      buttonText: "Back to Profile",
+      buttonIcon: Icons.arrow_back_rounded,
+      onButtonPressed: () => Navigator.pop(context),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.green.shade50,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(Icons.mark_email_read_rounded, size: 80, color: Colors.green.shade600),
         ),
       ),
     );
@@ -841,16 +625,7 @@ class FeedbackBottomSheet extends StatefulWidget {
 
 class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
   String? _selectedFeedbackType;
-  bool _isLoading = true;
   final TextEditingController _feedbackController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (mounted) setState(() => _isLoading = false);
-    });
-  }
 
   @override
   void dispose() {
@@ -892,7 +667,6 @@ class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
                   const SizedBox(height: 40),
                   _feedbackOption(Icons.bug_report_rounded, "Report a Bug"),
                   _feedbackOption(Icons.lightbulb_rounded, "Suggest a Feature"),
-                  _feedbackOption(Icons.star_rounded, "Rate the App"),
                   _feedbackOption(Icons.help_rounded, "Other Issues"),
                   const SizedBox(height: 60),
                   if (_selectedFeedbackType != null) ...[

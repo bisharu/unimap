@@ -46,6 +46,7 @@ dependencies:
   flutter_compass: ^0.8.1
   collection: ^1.19.1
   mobile_scanner: ^6.0.5
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -57,6 +58,13 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/unimapIcon.png"
+  min_sdk_android: 21 # flutter_launcher_icons requires this to be specified if not using default
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -76,6 +84,8 @@ flutter:
 
   assets: 
     - assets/images/adbuLogo.png
+    - assets/images/unimapLogo.png
+    - assets/images/unimapIcon.png
     - assets/geojson/ground.geojson
     - assets/geojson/floor_1.geojson
     - assets/geojson/floor_2.geojson

@@ -13,10 +13,21 @@ class SignUp extends StatefulWidget {
 
 class _SignUpState extends State<SignUp> {
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _idController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _idController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
   bool _isPasswordVisible = false;
   bool _isConfirmPasswordVisible = false;
 
@@ -24,14 +35,22 @@ class _SignUpState extends State<SignUp> {
 
   Future<void> _handleSignUp() async {
     final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
     final id = _idController.text.trim().toUpperCase();
     final password = _passwordController.text;
     final confirmPassword = _confirmPasswordController.text;
 
     // 1. Basic Empty Validation
-    if (name.isEmpty || id.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
+    if (name.isEmpty || email.isEmpty || id.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill all fields')),
+      );
+      return;
+    }
+
+    if (!email.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a valid email address')),
       );
       return;
     }
@@ -71,15 +90,16 @@ class _SignUpState extends State<SignUp> {
     setState(() => _isLoading = true);
 
     try {
-      // Firebase Auth uses emails. We'll use id@unimap.local as a virtual email.
+      // Firebase Auth uses emails. We'll use the user's real email.
       final userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: '${id.toLowerCase()}@unimap.local',
+        email: email,
         password: password,
       );
 
       // Save user profile to Firestore
       await FirebaseFirestore.instance.collection('users').doc(userCredential.user!.uid).set({
         'name': name,
+        'email': email,
         'uid': userCredential.user!.uid,
         'studentId': id,
         'createdAt': FieldValue.serverTimestamp(),
@@ -180,7 +200,7 @@ class _SignUpState extends State<SignUp> {
                     ),
                     const SizedBox(height: 25),
                     
-                    // Name Field
+    // Name Field
                     TextField(
                       controller: _nameController,
                       onChanged: (val) {
@@ -201,6 +221,24 @@ class _SignUpState extends State<SignUp> {
                         filled: true,
                         fillColor: Colors.white,
                         hintText: 'Name',
+                        hintStyle: const TextStyle(color: Colors.grey),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 14),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(30),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Email Field
+                    TextField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white,
+                        hintText: 'Email Address',
                         hintStyle: const TextStyle(color: Colors.grey),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 14),
                         border: OutlineInputBorder(

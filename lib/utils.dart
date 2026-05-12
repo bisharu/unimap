@@ -1,5 +1,3 @@
-import 'package:flutter/material.dart';
-
 /// Central utility class for UniMap common logic
 class UniUtils {
   /// Validates a Student/Staff ID based on the format "DC" + 4 digits (0000-0100)

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -11,14 +12,15 @@ import 'upload_rooms.dart'; // Import the upload script
 
   void main() async {
     WidgetsFlutterBinding.ensureInitialized();
+    HttpOverrides.global = MyHttpOverrides();
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
 
     // Upload room data to Firestore in background (uncomment to sync new assets)
-    // if (kDebugMode) {
-    //   uploadRoomsToFirestore();
-    // }
+    if (kDebugMode) {
+      uploadRoomsToFirestore();
+    }
 
     // 1. Tell Android to draw edge-to-edge behind system bars
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -30,6 +32,14 @@ import 'upload_rooms.dart'; // Import the upload script
     ));
     
     runApp(const MyApp());
+  }
+
+  class MyHttpOverrides extends HttpOverrides {
+    @override
+    HttpClient createHttpClient(SecurityContext? context) {
+      return super.createHttpClient(context)
+        ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+    }
   }
 
   class MyApp extends StatelessWidget {
@@ -295,8 +305,9 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
   @override
   void initState() {
     super.initState();
+    
     // Delay to simulate loading and show the beautiful splash text
-    Future.delayed(const Duration(milliseconds: 2500), () {
+    Future.delayed(const Duration(milliseconds: 4000), () {
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -323,21 +334,11 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min, // Keep contents compactly centered
                     children: [
-                      // Placeholder Logo (until unimap_logo.png is added to assets/images/)
-                      const Icon(
-                        Icons.map_rounded,
-                        size: 180,
-                        color: Color(0xFF1E5D6A),
-                      ),
-                      const SizedBox(height: 25), // Spacing between logo and text
-                      const Text(
-                        'UniMap',
-                        style: TextStyle(
-                          fontFamily: 'googlesans', // Switching to Google Sans
-                          fontSize: 55, // Slightly smaller to match the thick font visually
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black, // Dark ink
-                        ),
+                      // Show the actual unimap logo instead of the placeholder
+                      Image.asset(
+                        'assets/images/unimapLogo.png',
+                        width: 220,
+                        height: 220,
                       ),
                     ],
                   ),

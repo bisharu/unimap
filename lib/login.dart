@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'homescreen.dart';
 import 'profile_screens.dart';
 import 'utils.dart';
@@ -49,9 +50,28 @@ class _LoginState extends State<Login> {
     setState(() => _isLoading = true);
 
     try {
-      // Map the ID back to the virtual email used during registration
+      // 1. Look up the email associated with this Student ID in Firestore
+      final userQuery = await FirebaseFirestore.instance
+          .collection('users')
+          .where('studentId', isEqualTo: id)
+          .limit(1)
+          .get();
+
+      if (userQuery.docs.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No account found for this ID')),
+          );
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
+
+      final realEmail = userQuery.docs.first.data()['email'];
+
+      // 2. Sign in with the real email
       await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: '$id@unimap.local',
+        email: realEmail,
         password: password,
       );
 
