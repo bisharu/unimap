@@ -12,6 +12,13 @@
 .swiftpm/
 migrate_working_dir/
 
+# Custom ignored files
+analysis_output*.txt
+test_map.dart
+test_r.dart
+test_retina.dart
+/android/build/
+
 # IntelliJ related
 *.iml
 *.ipr

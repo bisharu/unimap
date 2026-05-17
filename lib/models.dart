@@ -234,3 +234,48 @@ class UniPath {
         'endPoint': endPoint,
       };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NAVIGATION MODELS
+// ─────────────────────────────────────────────────────────────────────────────
+
+class NavPoint {
+  final double latitude;
+  final double longitude;
+  final int floor;
+
+  NavPoint({
+    required this.latitude,
+    required this.longitude,
+    required this.floor,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NavPoint &&
+          latitude == other.latitude &&
+          longitude == other.longitude &&
+          floor == other.floor;
+
+  @override
+  int get hashCode => latitude.hashCode ^ longitude.hashCode ^ floor.hashCode;
+
+  @override
+  String toString() => 'NavPoint(lat: $latitude, lng: $longitude, floor: $floor)';
+}
+
+class TransitionPoint {
+  final double latitude;
+  final double longitude;
+  final bool isLift;
+
+  TransitionPoint({
+    required this.latitude,
+    required this.longitude,
+    required this.isLift,
+  });
+
+  @override
+  String toString() => 'TransitionPoint(lat: $latitude, lng: $longitude, isLift: $isLift)';
+}

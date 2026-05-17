@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'profile_screens.dart';
 import 'skeleton.dart';
 
@@ -18,11 +19,33 @@ class _ProfilePageState extends State<ProfilePage> {
   Timer? _timer;
   String _timeRemaining = "00:00:30";
 
+  bool _isCalibrationMode = false;
+
   @override
   void initState() {
     super.initState();
     _fetchUserData();
     _startTimer();
+    _loadCalibrationMode();
+  }
+
+  Future<void> _loadCalibrationMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _isCalibrationMode = prefs.getBool('calibration_mode') ?? false;
+      });
+    }
+  }
+
+  Future<void> _toggleCalibrationMode(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('calibration_mode', value);
+    if (mounted) {
+      setState(() {
+        _isCalibrationMode = value;
+      });
+    }
   }
 
   @override
@@ -116,6 +139,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   _buildMenuItem(Icons.speaker_notes_rounded, 'Feedback', onTap: () {
                     Navigator.push(context, MaterialPageRoute(builder: (_) => const FeedbackBottomSheet()));
                   }),
+                  _buildSwitchItem(Icons.wifi_tethering, 'Calibration Mode', _isCalibrationMode, _toggleCalibrationMode),
                 ],
                 const Divider(height: 40, indent: 24, endIndent: 24),
                 _buildMenuItem(Icons.logout_rounded, 'Logout', 
@@ -262,6 +286,33 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
       ),
       trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.black26),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+    );
+  }
+
+  Widget _buildSwitchItem(IconData icon, String label, bool value, ValueChanged<bool> onChanged, {Color? color}) {
+    final itemColor = color ?? const Color(0xFF1E3A5F);
+    return SwitchListTile(
+      value: value,
+      onChanged: onChanged,
+      secondary: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: itemColor.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: itemColor, size: 22),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'googlesans',
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          color: itemColor,
+        ),
+      ),
+      activeColor: itemColor,
       contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
     );
   }

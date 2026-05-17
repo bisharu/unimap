@@ -131,6 +131,8 @@ class _SignUpState extends State<SignUp> {
           // Sign back out as we only wanted to verify credentials
           await FirebaseAuth.instance.signOut();
 
+          if (!mounted) return;
+
           if (existingName == name) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('This ID is already registered')),
@@ -141,12 +143,14 @@ class _SignUpState extends State<SignUp> {
             );
           }
         } catch (signinError) {
+          if (!mounted) return;
           // Password didn't match
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('This ID is already taken')),
           );
         }
       } else {
+        if (!mounted) return;
         String message = 'Error: ${e.message ?? "An error occurred"}';
         if (e.code == 'weak-password') {
           message = 'The password is too weak';
@@ -156,6 +160,7 @@ class _SignUpState extends State<SignUp> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: ${e.toString()}')),
       );

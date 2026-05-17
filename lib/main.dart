@@ -336,7 +336,7 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
                     children: [
                       // Show the actual unimap logo instead of the placeholder
                       Image.asset(
-                        'assets/images/unimapLogo.png',
+                        'assets/images/unimapIcon.png',
                         width: 220,
                         height: 220,
                       ),

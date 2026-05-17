@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:collection/collection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,9 @@ import 'profile_screens.dart';
 import 'profile_page.dart';
 import 'skeleton.dart';
 import 'filter_screen.dart';
+import 'dart:ui' as ui;
+import 'services/wifi_fingerprint_service.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -50,6 +54,10 @@ class _HomeScreenState extends State<HomeScreen>
   bool _isTrackingLocation = false;
   String? _selectedRoomName;
   LatLng? _selectedRoomCentroid;
+  int? _selectedRoomFloor;
+  final WifiFingerprintService _fingerprintService = WifiFingerprintService();
+  bool _isCalibrationMode = false;
+  bool _isRecordingFingerprint = false;
 
   @override
   void initState() {
@@ -92,6 +100,16 @@ class _HomeScreenState extends State<HomeScreen>
     _fetchUserName();
     _loadAllRoomsData();
     _loadRecentSearches();
+    _loadCalibrationMode();
+  }
+
+  Future<void> _loadCalibrationMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _isCalibrationMode = prefs.getBool('calibration_mode') ?? false;
+      });
+    }
   }
 
   Future<void> _loadRecentSearches() async {
@@ -198,7 +216,9 @@ class _HomeScreenState extends State<HomeScreen>
             }
           }
 
-          final String name = (properties['name'] ?? properties['roomNo'] ?? '').toString();
+          final String rawName = (properties['name'] ?? '').toString();
+          final String roomNo = (properties['roomNo'] ?? '').toString().trim();
+          final String name = rawName.isNotEmpty && rawName != 'null' ? rawName : roomNo;
           final String type = (properties['type'] ?? 'other').toString().toLowerCase();
 
           if (points.isNotEmpty && name.isNotEmpty && name != "null") {
@@ -212,6 +232,7 @@ class _HomeScreenState extends State<HomeScreen>
 
             loadedRooms.add(RoomSearchItem(
               name: name,
+              roomNo: roomNo,
               type: type,
               floor: floor,
               centroid: centroid,
@@ -360,7 +381,9 @@ class _HomeScreenState extends State<HomeScreen>
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => const ProfilePage()),
-    );
+    ).then((_) {
+      _loadCalibrationMode();
+    });
   }
 
   Future<void> _openFilterScreen(BuildContext context) async {
@@ -673,9 +696,12 @@ class _HomeScreenState extends State<HomeScreen>
                 userLocation: _currentLocation,
                 heading: _heading,
                 onRoomSelected: (name, centroid) {
+                  // Find the room to get its floor
+                  final room = _allRooms.firstWhereOrNull((r) => r.name == name);
                   setState(() {
                     _selectedRoomName = name;
                     _selectedRoomCentroid = centroid;
+                    _selectedRoomFloor = room?.floor;
                   });
                 },
               ),
@@ -773,10 +799,66 @@ class _HomeScreenState extends State<HomeScreen>
               right: 16,
               child: _buildFloorFabMenu(),
             ),
+
+          // ── 8. CALIBRATION FAB ─────────────────────────────────────────────
+          if (!_isSearchFocused && _selectedRoomName != null && _isCalibrationMode)
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 120, // Above directions panel
+              left: 16,
+              child: _buildCalibrationButton(),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildCalibrationButton() {
+    return FloatingActionButton.extended(
+      heroTag: 'calibration_fab',
+      onPressed: _isRecordingFingerprint ? null : _recordFingerprint,
+      backgroundColor: _isRecordingFingerprint ? Colors.grey : Colors.redAccent,
+      icon: _isRecordingFingerprint
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+            )
+          : const Icon(Icons.wifi_tethering, color: Colors.white),
+      label: Text(
+        _isRecordingFingerprint ? "Scanning WiFi..." : "Record Fingerprint",
+        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  Future<void> _recordFingerprint() async {
+    if (_selectedRoomName == null) return;
+    
+    setState(() {
+      _isRecordingFingerprint = true;
+    });
+
+    try {
+      bool hasPermissions = await _fingerprintService.requestPermissions();
+      if (!hasPermissions) {
+        _showLocationSnackbar("Location/WiFi permissions are required.");
+        return;
+      }
+
+      final vector = await _fingerprintService.collectWifiVector();
+      await _fingerprintService.saveFingerprint(_selectedRoomName!, vector);
+      
+      _showLocationSnackbar("✅ Fingerprint saved for $_selectedRoomName");
+    } catch (e) {
+      _showLocationSnackbar("Error saving fingerprint: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRecordingFingerprint = false;
+        });
+      }
+    }
   }
 
   Widget _buildFloorFabMenu() {
@@ -957,11 +1039,19 @@ class _HomeScreenState extends State<HomeScreen>
       double score = 0;
       final roomNameLower = room.name.toLowerCase();
       final roomTypeLower = room.type.toLowerCase();
+      final roomNoLower = room.roomNo.toLowerCase();
       
       // 1. Exact Substring Match (Highest priority)
       if (roomNameLower.contains(queryLower) || roomTypeLower.contains(queryLower)) {
         score += 100;
         if (roomNameLower.startsWith(queryLower)) score += 50; // Bonus for starting with query
+      }
+      
+      // 1b. Room Number Match
+      if (roomNoLower == queryLower) {
+        score += 200; // Highest priority for exact room number match
+      } else if (roomNoLower.contains(queryLower)) {
+        score += 120;
       }
       
       // 2. Word-by-Word Analysis (Tokenization)
@@ -1335,6 +1425,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildSearchResultItem(String title, RoomSearchItem room) {
+    final bool hasRoomNo = room.roomNo.isNotEmpty && room.roomNo != 'null' && !room.roomNo.startsWith('G');
+    final String subtitle = hasRoomNo ? 'Rm ${room.roomNo} · Floor ${room.floor == 0 ? 'G' : room.floor.toString()}' : 'Floor ${room.floor == 0 ? 'G' : room.floor.toString()}';
+    
     return Container(
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
@@ -1350,6 +1443,14 @@ class _HomeScreenState extends State<HomeScreen>
             color: Colors.black87,
           ),
         ),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(
+            fontFamily: 'googlesans',
+            fontSize: 11,
+            color: Colors.grey.shade500,
+          ),
+        ),
         trailing: const Icon(Icons.location_on_outlined, color: Colors.black87, size: 20),
         onTap: () {
           // Hide search overlay and clear focus
@@ -1360,6 +1461,7 @@ class _HomeScreenState extends State<HomeScreen>
             _searchController.text = room.name;
             _selectedRoomName = room.name;
             _selectedRoomCentroid = room.centroid;
+            _selectedRoomFloor = room.floor;
             _selectedFloor = room.floor; // Update the floor selector
           });
 
@@ -1432,6 +1534,7 @@ class _HomeScreenState extends State<HomeScreen>
                   setState(() {
                     _selectedRoomName = null;
                     _selectedRoomCentroid = null;
+                    _selectedRoomFloor = null;
                   });
                   _mapKey.currentState?.setRoute(null);
                 },
@@ -1445,7 +1548,10 @@ class _HomeScreenState extends State<HomeScreen>
             child: ElevatedButton.icon(
               onPressed: () {
                 if (_selectedRoomCentroid != null) {
-                  _mapKey.currentState?.showDirectionsTo(_selectedRoomCentroid!);
+                  _mapKey.currentState?.showDirectionsTo(
+                    _selectedRoomCentroid!,
+                    destinationFloor: _selectedRoomFloor,
+                  );
                 }
               },
               icon: const Icon(Icons.directions_rounded, color: Colors.white),
@@ -1471,146 +1577,292 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   // ── SEARCH BAR (map mode – tappable pill) ───────────────────────────────────
-  Widget _buildSearchBar(BuildContext context) {
-    if (_isInitializing) {
-      return const Skeleton(height: 52, borderRadius: 30);
-    }
-    return GestureDetector(
-      onTap: () {
-        setState(() => _isSearchFocused = true);
-        // autofocus in overlay handles keyboard
-      },
-      child: Container(
-        height: 52,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(30),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.10),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 16),
-            const Icon(Icons.search_rounded, color: Colors.black54, size: 22),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                _searchQuery.isEmpty ? 'Search location' : _searchQuery,
-                style: TextStyle(
-                  fontFamily: 'googlesans',
-                  fontSize: 20,
-                  color: _searchQuery.isEmpty
-                      ? Colors.black.withValues(alpha: 0.40)
-                      : Colors.black87,
-                ),
-                overflow: TextOverflow.ellipsis,
+  // Widget _buildSearchBar(BuildContext context) {
+  //   if (_isInitializing) {
+  //     return const Skeleton(height: 52, borderRadius: 30);
+  //   }
+  //   return GestureDetector(
+  //     onTap: () {
+  //       setState(() => _isSearchFocused = true);
+  //       // autofocus in overlay handles keyboard
+  //     },
+  //     child: Container(
+  //       height: 52,
+  //       decoration: BoxDecoration(
+  //         color: Colors.white,
+  //         borderRadius: BorderRadius.circular(30),
+  //         boxShadow: [
+  //           BoxShadow(
+  //             color: Colors.black.withValues(alpha: 0.10),
+  //             blurRadius: 12,
+  //             offset: const Offset(0, 4),
+  //           ),
+  //         ],
+  //       ),
+  //       child: Row(
+  //         children: [
+  //           const SizedBox(width: 16),
+  //           const Icon(Icons.search_rounded, color: Colors.black54, size: 22),
+  //           const SizedBox(width: 10),
+  //           Expanded(
+  //             child: Text(
+  //               _searchQuery.isEmpty ? 'Search location' : _searchQuery,
+  //               style: TextStyle(
+  //                 fontFamily: 'googlesans',
+  //                 fontSize: 20,
+  //                 color: _searchQuery.isEmpty
+  //                     ? Colors.black.withValues(alpha: 0.40)
+  //                     : Colors.black87,
+  //               ),
+  //               overflow: TextOverflow.ellipsis,
+  //             ),
+  //           ),
+  //           const SizedBox(width: 8),
+  //           // QR Scanner button
+  //           GestureDetector(
+  //             onTap: () => _showQrScanner(context),
+  //             child: Container(
+  //               width: 36,
+  //               height: 36,
+  //               margin: const EdgeInsets.only(right: 4),
+  //               decoration: BoxDecoration(
+  //                 color: const Color(0xFF5B5FEF).withValues(alpha: 0.10),
+  //                 shape: BoxShape.circle,
+  //               ),
+  //               child: const Icon(
+  //                 Icons.qr_code_scanner_rounded,
+  //                 color: Color(0xFF5B5FEF),
+  //                 size: 20,
+  //               ),
+  //             ),
+  //           ),
+  //           const SizedBox(width: 4),
+  //           // Profile avatar
+  //           GestureDetector(
+  //             onTap: () => _showProfileMenu(context),
+  //             child: Container(
+  //               width: 36,
+  //               height: 36,
+  //               margin: const EdgeInsets.only(right: 8),
+  //               decoration: BoxDecoration(
+  //                 color: Colors.black.withValues(alpha: 0.7),
+  //                 shape: BoxShape.circle,
+  //               ),
+  //               child: Center(
+  //                 child: Text(
+  //                   _getUserInitial(),
+  //                   style: const TextStyle(
+  //                     color: Colors.white,
+  //                     fontWeight: FontWeight.bold,
+  //                     fontSize: 16,
+  //                   ),
+  //                 ),
+  //               ),
+  //             ),
+  //           ),
+  //         ],
+  //       ),
+  //     ),
+  //   );
+  // }
+
+Widget _buildSearchBar(BuildContext context) {
+  final bool focused = _isSearchFocused;
+
+  return GestureDetector(
+    onTap: () {
+      if (!_searchFocusNode.hasFocus) _searchFocusNode.requestFocus();
+    },
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.withOpacity(0.4),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+        borderRadius: BorderRadius.circular(28),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
+          child: Container(
+            height: focused ? 56 : 52,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                width: 2,
+                // Neon gradient border
+                color: Colors.transparent,
               ),
+              // gradient: const LinearGradient(
+              //   colors: [Color(0xFFFF00FF), Color(0xFF00BFFF)], // pink → blue
+              //   begin: Alignment.centerLeft,
+              //   end: Alignment.centerRight,
+              // ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.pinkAccent.withOpacity(0.4),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                  offset: const Offset(-2, 0),
+                ),
+                BoxShadow(
+                  color: Colors.blueAccent.withOpacity(0.4),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                  offset: const Offset(2, 0),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            // QR Scanner button
-            GestureDetector(
-              onTap: () => _showQrScanner(context),
-              child: Container(
-                width: 36,
-                height: 36,
-                margin: const EdgeInsets.only(right: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF5B5FEF).withValues(alpha: 0.10),
-                  shape: BoxShape.circle,
+            child: Row(
+              children: [
+                // Search icon
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.black.withOpacity(0.3)),
+                  ),
+                  child: const Icon(Icons.search, color: Colors.black, size: 22),
                 ),
-                child: const Icon(
-                  Icons.qr_code_scanner_rounded,
-                  color: Color(0xFF5B5FEF),
-                  size: 20,
-                ),
-              ),
-            ),
-            const SizedBox(width: 4),
-            // Profile avatar
-            GestureDetector(
-              onTap: () => _showProfileMenu(context),
-              child: Container(
-                width: 36,
-                height: 36,
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.7),
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    _getUserInitial(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                const SizedBox(width: 12),
+
+                // Text field
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    style: const TextStyle(color: Colors.black, fontSize: 15),
+                    cursorColor: Colors.blueAccent,
+                    onChanged: (value) {
+                      setState(() => _searchQuery = value);
+                    },
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(vertical: 10),
+                      hintText: 'Search rooms, labs, halls...',
+                      hintStyle: TextStyle(color: Colors.black),
+                      border: InputBorder.none,
                     ),
                   ),
                 ),
-              ),
+
+                // Clear button or QR/Profile actions
+                if (_searchQuery.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.black, size: 20),
+                    onPressed: () {
+                      setState(() {
+                        _searchController.clear();
+                        _searchQuery = '';
+                        _mapKey.currentState?.setHighlight(null);
+                      });
+                    },
+                  )
+                else
+                  Row(
+                    children: [
+                      // QR Scanner button
+                      IconButton(
+                        icon: const Icon(Icons.qr_code_scanner, color: Colors.black, size: 22),
+                        onPressed: () => _showQrScanner(context),
+                      ),
+                      // Profile icon button
+                      GestureDetector(
+                        onTap: () => _showProfileMenu(context),
+                        child: CircleAvatar(
+                          radius: 16,
+                          backgroundColor: Colors.blue.withOpacity(0.2),
+                          child: Text(
+                            _getUserInitial(),
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ── LOCATION BUTTON ───────────────────────────────────────────────────────
   Widget _buildLocationButton() {
     if (_isInitializing) {
       return const Skeleton(
-        width: 58,
-        height: 58,
+        width: 60,
+        height: 60,
         shape: BoxShape.circle,
       );
     }
     return GestureDetector(
       onTap: _isFetchingLocation ? null : _getCurrentLocation,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: 58,
-        height: 58,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF5B5FEF).withValues(alpha: 0.35),
-              blurRadius: 18,
-              spreadRadius: 2,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Center(
-          child: _isFetchingLocation
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    color: Color(0xFF5B5FEF),
-                    strokeWidth: 2.5,
-                  ),
-                )
-              : Container(
-                  width: 24,
-                  height: 24,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF5B5FEF),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.my_location_rounded,
-                    color: Colors.white,
-                    size: 14,
-                  ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // ── Glowing gradient ring (blur simulates halo from reference image) ──
+          ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              width: 70,
+              height: 70,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: SweepGradient(
+                  colors: [
+                    Color(0xFF4FC3F7), // light blue
+                    Color(0xFF9C27B0), // violet/purple
+                    Color(0xFF00E5FF), // cyan / teal
+                    Color(0xFF4FC3F7), // back to blue — seamless loop
+                  ],
                 ),
-        ),
+              ),
+            ),
+          ),
+          // ── Dark inner button ──
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 52,
+            height: 52,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: _isFetchingLocation
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.my_location_rounded,
+                      color: Colors.blue,
+                      size: 20,
+                    ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1875,12 +2127,14 @@ class _ProfileBottomSheetState extends State<_ProfileBottomSheet> {
 
 class RoomSearchItem {
   final String name;
+  final String roomNo;
   final String type;
   final int floor;
   final LatLng centroid;
 
   RoomSearchItem({
     required this.name,
+    this.roomNo = '',
     required this.type,
     required this.floor,
     required this.centroid,

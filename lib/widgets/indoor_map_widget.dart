@@ -1,9 +1,11 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'dart:convert';
 import 'package:flutter/services.dart';
-import '../utils/astar_router.dart';
+import '../utils/dijkstra_router.dart';
+import '../models.dart';
 
 // Floor identifiers: 0 = Ground, 1 = Floor 1, 2 = Floor 2, 3 = Floor 3, 4 = Floor 4
 class IndoorMapWidget extends StatefulWidget {
@@ -35,6 +37,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   List<Polyline> _borderPolylines = [];
   int _selectedFloor = 0;
   String? _selectedRoomName;
+  LatLng? _selectedRoomCentroid; // unique per-polygon identifier (centroid coords)
   String? _highlightType;   // active filter room type (null = no filter)
   double _currentZoom = 18.5;
 
@@ -46,7 +49,8 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   static const LatLng _buildingCenter = LatLng(26.1297, 91.6197);
 
   // Router for pathfinding
-  final AStarRouter _router = AStarRouter();
+  final DijkstraRouter _router = DijkstraRouter();
+  List<NavPoint>? _currentFullRoute;
 
   @override
   void initState() {
@@ -54,6 +58,58 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     _selectedFloor  = widget.currentFloor;
     _highlightType  = widget.highlightType;
     _loadFloorPlan(_selectedFloor);
+    _initializeGlobalRouter();
+  }
+
+  Future<void> _initializeGlobalRouter() async {
+    final Map<int, List<List<LatLng>>> allFloorPaths = {};
+    final Map<int, List<TransitionPoint>> allTransitionPoints = {};
+
+    for (int floor = 0; floor <= 4; floor++) {
+      try {
+        final String fileName = floor == 0 ? 'ground' : 'floor_$floor';
+        final String data = await rootBundle.loadString('assets/geojson/$fileName.geojson');
+        final geoJson = json.decode(data);
+        _geoJsonCache[floor] = geoJson;
+
+        final List<List<LatLng>> paths = [];
+        final List<TransitionPoint> transitions = [];
+
+        for (final feature in geoJson['features']) {
+          final geometry = feature['geometry'];
+          final props = feature['properties'];
+          final type = (props['type'] ?? '').toString().toLowerCase();
+
+          if (geometry['type'] == 'LineString' && (type == 'path' || type == 'corridor')) {
+            final coords = geometry['coordinates'] as List;
+            final points = coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())).toList();
+            paths.add(points);
+          }
+          
+          if (type.contains('stair') || type.contains('lift') || type.contains('elevator')) {
+            List<LatLng> points = [];
+            if (geometry['type'] == 'Polygon') {
+              final coords = geometry['coordinates'][0] as List;
+              points = coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())).toList();
+            } else if (geometry['type'] == 'LineString') {
+               final coords = geometry['coordinates'] as List;
+               points = coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())).toList();
+            }
+            if (points.isNotEmpty) {
+              final centroid = _calculateCentroid(points);
+              final isLift = type.contains('lift') || type.contains('elevator');
+              transitions.add(TransitionPoint(latitude: centroid.latitude, longitude: centroid.longitude, isLift: isLift));
+            }
+          }
+        }
+        allFloorPaths[floor] = paths;
+        allTransitionPoints[floor] = transitions;
+      } catch (e) {
+        debugPrint('Error pre-loading floor $floor: $e');
+      }
+    }
+
+    _router.buildGlobalGraph(allFloorPaths, allTransitionPoints);
   }
 
   @override
@@ -123,39 +179,84 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           routingPaths.add(points);
         }
 
-        final String name = (properties['name'] ?? properties['roomNo'] ?? '').toString();
-        final bool isSelected = _selectedRoomName == name;
-        final bool hasName = name.isNotEmpty && name != "null";
+        final String rawName = (properties['name'] ?? '').toString();
+        final String rawRoomNo = (properties['roomNo'] ?? '').toString().trim();
+        final String name = rawName == 'null' ? '' : rawName;
+        final String roomNo = rawRoomNo == 'null' ? '' : rawRoomNo;
+
+        // Use name for display; fall back to roomNo for identity
+        final String displayName = name.isNotEmpty ? name : roomNo;
+
+        // Compute centroid once — used both for isSelected check and marker placement.
+        // Centroid coordinates uniquely identify the polygon even when many features
+        // share the same display name (e.g. multiple rooms all named "CLASSROOM").
+        final LatLng featureCentroid = _calculateCentroid(points);
+        final bool isSelected = _selectedRoomCentroid != null &&
+            (featureCentroid.latitude  - _selectedRoomCentroid!.latitude).abs()  < 1e-6 &&
+            (featureCentroid.longitude - _selectedRoomCentroid!.longitude).abs() < 1e-6;
+
+        final bool hasExplicitName = name.isNotEmpty;
+        final bool isStructuralType = type == 'other' || type == 'null' || type == '';
+        final bool isPath = type == 'path' || type == 'corridor';
+
+        // Treat as "hasName" only if it has an explicit name or a valid room type.
+        // This prevents structural walls (which have only a roomNo) from being labeled on the map.
+        final bool hasName = displayName.isNotEmpty && (hasExplicitName || (!isStructuralType && !isPath));
         
         final bool isFiltering = _highlightType != null;
         final bool typeMatches = isFiltering &&
             (type.contains(_highlightType!) || _highlightType!.contains(type));
 
+        // Category-based coloring with soft modern tones
         final Color baseColor = _getRoomColor(type);
         final Color fillColor;
         final Color borderColor;
         final double borderWidth;
 
-        if (isSelected && hasName) {
-          fillColor   = baseColor.withValues(alpha: 1.0);
-          borderColor = Colors.white;
-          borderWidth = 3.5;
+        if (isSelected) {
+
+          fillColor = baseColor.withValues(alpha: 0.85);
+
+          borderColor = const Color(0xFF5B5FEF);
+
+          borderWidth = 3.0;
+
         } else if (!isFiltering) {
-          fillColor   = baseColor.withValues(alpha: 1.0);
-          borderColor = baseColor.withValues(alpha: 1.0);
-          borderWidth = hasName ? 1.0 : 1.5;
-        } else if (typeMatches && hasName) {
-          fillColor   = baseColor.withValues(alpha: 1.0);
-          borderColor = Colors.white;
-          borderWidth = 2.5;
+
+          // Colored room interiors
+          fillColor = baseColor.withValues(alpha: 0.75);
+
+          // Neutral dark borders
+          borderColor = const Color(0xFF424242);
+
+          borderWidth = 1.5;
+
+        } else if (typeMatches) {
+
+          fillColor = baseColor.withValues(alpha: 0.9);
+
+          borderColor = const Color(0xFF5B5FEF);
+
+          borderWidth = 2.2;
+
         } else {
-          fillColor   = baseColor.withValues(alpha: 0.3); // Increased from 0.15
-          borderColor = baseColor.withValues(alpha: 0.4);
-          borderWidth = 0.5;
+
+          fillColor = baseColor.withValues(alpha: 0.25);
+
+          borderColor = const Color(0xFF757575);
+
+          borderWidth = 1.0;
         }
 
         if (type != 'path' && type != 'corridor') {
-          if (hasName) {
+          bool isClosed = false;
+          if (points.length >= 3) {
+            final double latDiff = (points.first.latitude - points.last.latitude).abs();
+            final double lngDiff = (points.first.longitude - points.last.longitude).abs();
+            isClosed = (latDiff < 1e-4 && lngDiff < 1e-4);
+          }
+
+          if (points.length >= 3 && (geometry['type'] == 'Polygon' || isClosed)) {
             polygons.add(Polygon(
               points: points,
               color: fillColor,
@@ -164,20 +265,20 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
               isFilled: true,
             ));
           } else {
-            // Draw unnamed structural features as polylines to prevent unwanted
-            // diagonal closure lines across the map.
+            // For open LineStrings or unnamed structural features, use Polyline.
             borderLines.add(Polyline(
               points: points,
-              color: baseColor.withValues(alpha: 1.0), // Solid borders for structure
+              color: isSelected ? const Color(0xFF5B5FEF) : borderColor.withValues(alpha: 0.8),
               strokeWidth: borderWidth,
             ));
           }
         }
 
-        if (hasName && showLabels && (!isFiltering || typeMatches || isSelected)) {
+        if (hasName && (showLabels || isSelected) && (!isFiltering || typeMatches || isSelected)) {
           potentialMarkers.add({
-            'point': _calculateCentroid(points),
-            'name': name,
+            'point': featureCentroid, // reuse already-computed centroid
+            'name': displayName,
+            'roomNo': roomNo,
             'type': type,
             'isSelected': isSelected,
             'typeMatches': typeMatches,
@@ -196,7 +297,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
         _borderPolylines = borderLines;
         _roomMarkers = _deconflictMarkers(potentialMarkers);
       });
-      _router.buildGraph(routingPaths);
+      // No need to rebuild graph here, it's done once for all floors
     }
   }
 
@@ -207,14 +308,15 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     for (var m in potentialMarkers) {
       final LatLng point = m['point'];
       final String name = m['name'];
+      final String roomNo = m['roomNo'] ?? '';
       final String type = m['type'];
       
       // Calculate screen position
-      final CustomPoint<double> pixel = _mapController.camera.project(point);
+      final Point<double> pixel = _mapController.camera.project(point);
       
-      // Vertical layout: wider and taller to allow full room names
-      const double w = 100;
-      const double h = 75;
+      // Vertical layout: wider and taller to allow full room names + room number
+      const double w = 110;
+      const double h = 85;
       
       final Rect rect = Rect.fromCenter(
         center: Offset(pixel.x, pixel.y),
@@ -238,7 +340,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           width: w,
           height: h,
           rotate: true,
-          child: _buildMarkerWidget(name, type, m['isSelected']),
+          child: _buildMarkerWidget(name, roomNo, type, m['isSelected']),
         ));
         occupiedRects.add(rect.inflate(4)); // Add some padding between labels
       }
@@ -246,8 +348,11 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     return markers;
   }
 
-  Widget _buildMarkerWidget(String name, String type, bool isSelected) {
+  Widget _buildMarkerWidget(String name, String roomNo, String type, bool isSelected) {
     final Color categoryColor = _getRoomColor(type);
+    // Use a darker version of the category color for icons to ensure contrast
+    final Color iconColor = isSelected ? Colors.white : HSLColor.fromColor(categoryColor).withLightness(0.4).toColor();
+    final bool hasRoomNo = roomNo.isNotEmpty && roomNo != 'null' && !roomNo.startsWith('G');
     
     return Center(
       child: Column(
@@ -260,39 +365,64 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
               color: isSelected ? const Color(0xFF5B5FEF) : Colors.white,
               shape: BoxShape.circle,
               border: Border.all(
-                color: isSelected ? Colors.white : categoryColor.withValues(alpha: 0.8),
+                color: isSelected ? Colors.white : iconColor.withValues(alpha: 0.8),
                 width: isSelected ? 2 : 1,
               ),
             ),
             child: Icon(
               _getRoomIcon(type),
               size: isSelected ? 15 : 12,
-              color: isSelected ? Colors.white : categoryColor,
+              color: isSelected ? Colors.white : iconColor,
             ),
           ),
           const SizedBox(height: 3),
-          // Name label with white rectangular background
+          // Name + Room Number label with white rectangular background
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(2),
+              borderRadius: BorderRadius.circular(4),
               border: isSelected 
                 ? Border.all(color: const Color(0xFF5B5FEF), width: 2) 
                 : Border.all(color: Colors.black12, width: 0.5),
             ),
-            child: Text(
-              name,
-              style: TextStyle(
-                fontSize: isSelected ? 12 : 10,
-                fontWeight: FontWeight.bold,
-                color: Colors.black,
-                fontFamily: 'googlesans',
-                letterSpacing: -0.1,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              softWrap: true,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Room name
+                Text(
+                  name,
+                  style: TextStyle(
+                    fontSize: isSelected ? 11 : 9,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                    fontFamily: 'googlesans',
+                    letterSpacing: -0.1,
+                    height: 1.2,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: true,
+                ),
+                // Room number (shown below the name)
+                if (hasRoomNo) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    'Rm $roomNo',
+                    style: TextStyle(
+                      fontSize: isSelected ? 9 : 7.5,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected ? const Color(0xFF5B5FEF) : Colors.black54,
+                      fontFamily: 'googlesans',
+                      letterSpacing: 0.2,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
             ),
           ),
         ],
@@ -387,58 +517,79 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   }
 
   Color _getRoomColor(String type) {
-    // 🎨 Premium Vibrant Palette
     switch (type.trim().toLowerCase()) {
       case 'classroom':
       case 'class room':
-        return const Color(0xFF3683ff);
+      case 'seminar room':
+        return Colors.yellow; // yellow
+
       case 'lab':
       case 'laboratory':
-        return const Color(0xFF525150);
+      case 'workshop':
+        return const Color(0xFF1565C0); // Dark blue
+
       case 'office':
-      case 'cabin':
-        return const Color(0xFF61a8b0);
       case 'staff room':
-      case 'staffroom':
-        return const Color(0xFFB4C5DB);
+        return const Color(0xFF9E9E9E); // Grey
+
       case 'washroom':
       case 'toilet':
-        return const Color(0xFF000000);
+        return const Color(0xFF2196F3); // Blue
+
       case 'cafeteria':
       case 'cafetria':
+      case 'refreshment area':
+        return const Color(0xFFFF9800); // Orange
+
       case 'nescafe':
-      case 'coffee lounge':
-        return const Color(0xFF525150);
+        return const Color(0xFF795548); // Brown
+
       case 'auditorium':
       case 'hall':
       case 'chall':
-        return const Color(0xFFB4C5DB);
-      case 'terrace':
-        return const Color(0xFFECF0F1); 
-      case 'nursing station':
-      case 'infirmary':
-        return const Color(0xFFE74C3C); 
-      case 'common room':
-      case 'guest house':
-      case 'guesthouse':
-        return const Color(0xFFBDC3C7); 
-      case 'reception':
-        return const Color(0xFF2980B9); 
+      case 'conference hall':
+        return const Color(0xFF4E342E); // Dark brown
+
+      case 'faculty cabin':
+      case 'cabin':
+        return const Color(0xFF2E7D32); // Dark green
+
+      case 'parking lot':
+      case 'parking':
       case 'green area':
       case 'atrium':
       case 'quadrangle':
       case 'park':
-        return const Color(0xFF61b06f); 
-      case 'refreshment area':
-      case 'refreshmentarea':
-        return const Color(0xFF525150);
-      case 'waste segregation unit':
-      case 'vermi composting tank':
-        return const Color(0xFF7F8C8D);
+        return const Color(0xFF4CAF50); // Green
+
+      case 'coffee lounge':
+        return const Color(0xFFFFFFFF); // White
+
+      case 'gate':
+      case 'main gate':
+      case 'back gate':
+      case 'entry':
+      case 'exit':
+        return const Color(0xFFF44336); // Red
+
+      case 'library':
+        return const Color(0xFF9FA8DA); // indigo
+
+      case 'reception':
+      case 'waiting area':
+        return const Color(0xFF013220); //dark green
+
+      case 'staircase':
+      case 'stairs':
+      case 'lift':
+      case 'elevator':
+        return Colors.black; // black
+
       default:
-        return const Color(0xFF34495E); 
+        return const Color(0xFFE0E0E0);
     }
   }
+
 
   void setRoute(List<LatLng>? path) {
     if (mounted) {
@@ -469,14 +620,70 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     }
   }
 
-  void showDirectionsTo(LatLng destination) {
+  void showDirectionsTo(LatLng destination, {int? destinationFloor, bool accessibleRoute = false}) {
     if (widget.userLocation == null) return;
     
-    final path = _router.findPath(widget.userLocation!, destination);
-    setRoute(path);
+    final start = NavPoint(
+      latitude: widget.userLocation!.latitude,
+      longitude: widget.userLocation!.longitude,
+      floor: widget.currentFloor,
+    );
     
-    if (path != null && path.isNotEmpty) {
-      // Zoom out slightly to show the path if needed, or just keep focus
+    final end = NavPoint(
+      latitude: destination.latitude,
+      longitude: destination.longitude,
+      floor: destinationFloor ?? _selectedFloor,
+    );
+    
+    final path = _router.findPath(start, end, accessibleRoute: accessibleRoute);
+    _currentFullRoute = path;
+    _updateRouteLayer();
+  }
+
+  void _updateRouteLayer() {
+    if (_currentFullRoute == null || _currentFullRoute!.isEmpty) {
+      setRoute(null);
+      return;
+    }
+
+    final List<LatLng> visiblePoints = _currentFullRoute!
+        .where((p) => p.floor == _selectedFloor)
+        .map((p) => LatLng(p.latitude, p.longitude))
+        .toList();
+
+    setRoute(visiblePoints.isNotEmpty ? visiblePoints : null);
+    
+    // Check if transition cues are needed
+    _checkForFloorTransitions();
+  }
+
+  int? _getNextFloorInPath() {
+    if (_currentFullRoute == null || _currentFullRoute!.isEmpty) return null;
+    
+    // Check if the current floor has ANY points. 
+    // If we are currently NOT on the path, find the first floor that has path points.
+    bool currentFloorHasPath = _currentFullRoute!.any((p) => p.floor == _selectedFloor);
+    
+    if (!currentFloorHasPath) {
+       // Return the first floor that has path points
+       return _currentFullRoute!.first.floor;
+    }
+
+    // If we are on the current floor, find the NEXT floor in sequence
+    bool foundCurrent = false;
+    for (var point in _currentFullRoute!) {
+      if (point.floor == _selectedFloor) {
+        foundCurrent = true;
+      } else if (foundCurrent) {
+        return point.floor;
+      }
+    }
+    return null;
+  }
+
+  void _checkForFloorTransitions() {
+    if (mounted) {
+      setState(() {}); // Trigger rebuild to show/hide transition hints
     }
   }
 
@@ -523,12 +730,16 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     if (_selectedFloor != floor) {
       _selectedFloor = floor;
       _selectedRoomName = roomName;
+      _selectedRoomCentroid = centroid;
+      _highlightType = null; // clear filter so only this room is highlighted
       _loadFloorPlan(floor).then((_) {
         moveToLocation(centroid, zoom: 21.5);
       });
     } else {
       setState(() {
         _selectedRoomName = roomName;
+        _selectedRoomCentroid = centroid;
+        _highlightType = null; // clear filter so only this room is highlighted
       });
       _updateMapObjects();
       moveToLocation(centroid, zoom: 21.5);
@@ -538,7 +749,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   void setFloor(int floor) {
     if (_selectedFloor != floor) {
       setState(() => _selectedFloor = floor);
-      _loadFloorPlan(floor);
+      _loadFloorPlan(floor).then((_) {
+        _updateRouteLayer(); // Refresh route for the new floor
+      });
     }
   }
 
@@ -566,9 +779,11 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     for (final feature in geoJson['features']) {
       final properties = feature['properties'];
       final String roomType = (properties['type'] ?? '').toString().toLowerCase();
-      final String roomName = (properties['name'] ?? properties['roomNo'] ?? '').toString().toLowerCase();
+      final String rawName = (properties['name'] ?? '').toString().toLowerCase();
+      final String roomNo = (properties['roomNo'] ?? '').toString().trim().toLowerCase();
+      final String roomName = rawName.isNotEmpty && rawName != 'null' ? rawName : roomNo;
       
-      if (roomType.contains(query) || query.contains(roomType) || roomName.contains(query)) {
+      if (roomType.contains(query) || query.contains(roomType) || roomName.contains(query) || roomNo.contains(query)) {
         final geometry = feature['geometry'];
         if (geometry['type'] == 'Polygon') {
           final coords = geometry['coordinates'][0] as List;
@@ -605,13 +820,16 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
   void _handleMapTap(LatLng point) {
     String? tappedRoomName;
+    LatLng? tappedCentroid;
     final geoJson = _geoJsonCache[_selectedFloor];
-    
+
     if (geoJson != null) {
       for (final feature in geoJson['features']) {
         final geometry = feature['geometry'];
         final props = feature['properties'];
-        final name = (props['name'] ?? props['roomNo'] ?? '').toString();
+        final rawName = (props['name'] ?? '').toString();
+        final rawRoomNo = (props['roomNo'] ?? '').toString().trim();
+        final name = rawName.isNotEmpty && rawName != 'null' ? rawName : rawRoomNo;
         if (name.isEmpty || name == "null") continue;
 
         List<LatLng> featurePoints = [];
@@ -625,19 +843,33 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
         if (featurePoints.isNotEmpty && _isPointInPolygon(point, featurePoints)) {
           tappedRoomName = name;
-          if (widget.onRoomSelected != null) {
-            widget.onRoomSelected!(name, _calculateCentroid(featurePoints));
-          }
+          tappedCentroid = _calculateCentroid(featurePoints);
           break;
         }
       }
     }
 
-    if (tappedRoomName != _selectedRoomName) {
+    // Use centroid equality to detect a real selection change.
+    // Name alone is not sufficient because many rooms share the same display name
+    // (e.g. every classroom is named "CLASSROOM").
+    final bool alreadySelected = _selectedRoomCentroid != null &&
+        tappedCentroid != null &&
+        (tappedCentroid.latitude  - _selectedRoomCentroid!.latitude).abs()  < 1e-6 &&
+        (tappedCentroid.longitude - _selectedRoomCentroid!.longitude).abs() < 1e-6;
+
+    if (!alreadySelected) {
+      // Clear any active type-based filter so ONLY the tapped room is highlighted.
+      _highlightType = null;
       setState(() {
-        _selectedRoomName = tappedRoomName;
+        _selectedRoomName     = tappedRoomName;
+        _selectedRoomCentroid = tappedCentroid; // unique identifier for this polygon
       });
       _updateMapObjects();
+
+      // Notify parent after selection is fully resolved
+      if (tappedRoomName != null && tappedCentroid != null && widget.onRoomSelected != null) {
+        widget.onRoomSelected!(tappedRoomName, tappedCentroid);
+      }
     }
   }
 
@@ -662,9 +894,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             },
           ),
           children: [
-            // Google Satellite Imagery
+            // Neo-minimal map style with black roads
             TileLayer(
-              urlTemplate: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+              urlTemplate: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=s.t:2|s.e:g|p.c:%23f4f4f4,s.t:6|s.e:g|p.c:%23d4dadc,s.t:3|s.e:g|p.c:%23000000,s.t:4|p.v:off,s.t:all|s.e:l|p.v:off',
               userAgentPackageName: 'com.example.unimap',
             ),
             
@@ -727,6 +959,36 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             MarkerLayer(markers: _roomMarkers),
           ],
         ),
+
+        // ── FLOOR TRANSITION HINT ───────────────────────────────────────────
+        if (_getNextFloorInPath() != null)
+          Positioned(
+            bottom: 20,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                child: ElevatedButton.icon(
+                  onPressed: () => setFloor(_getNextFloorInPath()!),
+                  icon: Icon(_getNextFloorInPath()! > _selectedFloor ? Icons.unfold_more : Icons.unfold_less),
+                  label: Text(
+                    _selectedFloor == _currentFullRoute?.first.floor && !_currentFullRoute!.any((p) => p.floor == _selectedFloor)
+                    ? "Go to Floor ${_getNextFloorInPath()}"
+                    : "Continue on Floor ${_getNextFloorInPath()}",
+                    style: const TextStyle(fontFamily: 'googlesans', fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF5B5FEF),
+                    foregroundColor: Colors.white,
+                    elevation: 8,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

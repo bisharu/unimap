@@ -47,6 +47,8 @@ dependencies:
   collection: ^1.19.1
   mobile_scanner: ^6.0.5
   shared_preferences: ^2.5.5
+  wifi_scan: ^0.4.1+2
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:
@@ -59,6 +61,7 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.4.7
 
 flutter_launcher_icons:
   android: "launcher_icon"
