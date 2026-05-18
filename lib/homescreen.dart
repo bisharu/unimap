@@ -1680,27 +1680,8 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   bool _checkGeofence() {
-    debugPrint("???? [Geofence Check] Bypass active: $_geofenceBypass");
-    if (_geofenceBypass) return true;
-    if (_currentLocation == null) {
-      debugPrint("???? [Geofence Check] Location is null, blocking.");
-      return false;
-    }
-    
-    final campusCenter = const LatLng(26.1297, 91.6197);
-    final distance = const Distance().as(
-      LengthUnit.Meter,
-      _currentLocation!,
-      campusCenter,
-    );
-    
-    debugPrint("???? [Geofence Check] User Coord: ${_currentLocation!.latitude}, ${_currentLocation!.longitude}");
-    debugPrint("???? [Geofence Check] Campus Center: ${campusCenter.latitude}, ${campusCenter.longitude}");
-    debugPrint("???? [Geofence Check] Calculated Distance: $distance meters. Limit: 200.0 meters.");
-    
-    final allowed = distance <= 200.0;
-    debugPrint("???? [Geofence Check] Decision: ${allowed ? 'ALLOWED' : 'BLOCKED'}");
-    return allowed;
+    debugPrint("???? [Geofence Check] Geofence disabled. Returning true.");
+    return true;
   }
 
   double _getDistanceToCampus() {
@@ -2026,18 +2007,20 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildDirectionsPanel() {
-    final hasSteps = _isNavigating && _directionSteps.isNotEmpty;
-    final nextStep = hasSteps ? _directionSteps.first : null;
+    return _isNavigating ? _buildNavigationBar() : _buildRoomDetailSheet();
+  }
 
+  // ── COMPACT NAV BAR (shown while route is active) ─────────────────────────
+  Widget _buildNavigationBar() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 15,
+            color: Colors.black.withOpacity(0.13),
+            blurRadius: 20,
             offset: const Offset(0, -4),
           ),
         ],
@@ -2045,452 +2028,457 @@ class _HomeScreenState extends State<HomeScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (hasSteps && nextStep != null) ...[
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(nextStep.icon, color: const Color(0xFF6C63FF)),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Next Step',
-                        style: TextStyle(
-                          fontFamily: 'googlesans',
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF6C63FF),
-                        ),
-                      ),
-                      Text(
-                        nextStep.instruction,
-                        style: const TextStyle(
-                          fontFamily: 'googlesans',
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (nextStep.distance > 0)
-                        Text(
-                          'For ${nextStep.distance.round()} meters',
-                          style: const TextStyle(
-                            fontFamily: 'googlesans',
-                            fontSize: 12,
-                            color: Colors.black45,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.format_list_bulleted_rounded, color: Color(0xFF6C63FF)),
-                  onPressed: _showAllStepsBottomSheet,
-                  tooltip: 'Show entire path instructions',
-                ),
-              ],
+          Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.black12,
+              borderRadius: BorderRadius.circular(4),
             ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Divider(height: 1, color: Colors.black12),
-            ),
-          ],
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('locations')
-                .where('L_name', isEqualTo: _selectedRoomName)
-                .limit(1)
-                .snapshots(),
-            builder: (context, snapshot) {
-              String description = '';
-              String rType = '';
-              int rNo = 0;
-
-              if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-                final doc = snapshot.data!.docs.first;
-                final data = doc.data() as Map<String, dynamic>;
-                description = data['Description'] ?? '';
-                rType = data['r_type'] ?? '';
-                rNo = data['r_no'] ?? 0;
-              }
-
-              final isCabin = rType.toLowerCase() == 'cabin';
-              final parts = description.split('|');
-              final isFacultyProfile = isCabin && parts.length >= 4;
-
-              if (isFacultyProfile) {
-                final String fName = parts[0];
-                final String fDesignation = parts[1];
-                final String fDept = parts[2];
-                final String fEmail = parts[3];
-
-                String initials = '';
-                final cleanName = fName.replaceAll('Dr. ', '').replaceAll('Prof. ', '').trim();
-                final nameParts = cleanName.split(' ');
-                if (nameParts.isNotEmpty) {
-                  initials += nameParts[0][0];
-                  if (nameParts.length > 1) {
-                    initials += nameParts[1][0];
-                  }
-                }
-                initials = initials.toUpperCase();
-
-                return Column(
+          ),
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF3B5BDB),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.location_on_rounded, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.school_rounded,
-                              color: Color(0xFF6C63FF),
-                              size: 18,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'FACULTY CABIN $rNo',
-                              style: const TextStyle(
-                                fontFamily: 'googlesans',
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF6C63FF),
-                                letterSpacing: 0.8,
-                              ),
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          constraints: const BoxConstraints(),
-                          padding: EdgeInsets.zero,
-                          icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 20),
-                          onPressed: () {
-                            setState(() {
-                              _selectedRoomName = null;
-                              _selectedRoomCentroid = null;
-                              _selectedRoomFloor = null;
-                              _isNavigating = false; 
-                              _directionSteps = [];
-                            });
-                            _mapKey.currentState?.setRoute(null);
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            const Color(0xFF6C63FF).withOpacity(0.08),
-                            const Color(0xFF5B5FEF).withOpacity(0.03),
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: const Color(0xFF6C63FF).withOpacity(0.15),
-                          width: 1,
-                        ),
+                    Text(
+                      _selectedRoomName ?? '',
+                      style: const TextStyle(
+                        fontFamily: 'googlesans',
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
                       ),
-                      child: Row(
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      _selectedRoomFloor != null
+                          ? 'Floor ${_selectedRoomFloor == 0 ? "Ground" : _selectedRoomFloor}'
+                          : 'Assam Don Bosco University',
+                      style: const TextStyle(
+                        fontFamily: 'googlesans',
+                        fontSize: 12,
+                        color: Colors.black45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _showAllStepsBottomSheet,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF3B5BDB),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.directions_rounded, color: Colors.white, size: 22),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () {
+                  if (_selectedRoomCentroid != null) {
+                    _mapKey.currentState?.showDirectionsTo(
+                      _selectedRoomCentroid!,
+                      destinationFloor: _selectedRoomFloor,
+                    );
+                  }
+                },
+                icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 17),
+                label: const Text(
+                  'Start',
+                  style: TextStyle(
+                    fontFamily: 'googlesans',
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    fontSize: 14,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF3B5BDB),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  elevation: 0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: 200,
+            child: ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _isNavigating = false;
+                  _directionSteps = [];
+                });
+                _mapKey.currentState?.setRoute(null);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                elevation: 0,
+              ),
+              child: const Text(
+                'Exit Navigation',
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── FULL ROOM DETAIL SHEET ─────────────────────────────────────────────────
+  Widget _buildRoomDetailSheet() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.13),
+            blurRadius: 20,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('locations')
+            .where('L_name', isEqualTo: _selectedRoomName)
+            .limit(1)
+            .snapshots(),
+        builder: (context, snapshot) {
+          String description = '';
+          String rType = '';
+          int rNo = 0;
+          if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+            final data = snapshot.data!.docs.first.data() as Map<String, dynamic>;
+            description = data['Description'] ?? '';
+            rType = data['r_type'] ?? '';
+            rNo = data['r_no'] ?? 0;
+          }
+          final isCabin = rType.toLowerCase() == 'cabin';
+          final parts = description.split('|');
+          final isFacultyProfile = isCabin && parts.length >= 4;
+          final floorLabel = _selectedRoomFloor == null
+              ? 'Assam Don Bosco University'
+              : 'Room no. ${rNo > 0 ? rNo : "-"}, Floor - ${_selectedRoomFloor == 0 ? "G" : _selectedRoomFloor}';
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 10, bottom: 4),
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF3B5BDB),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.location_on_rounded, color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            width: 52,
-                            height: 52,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF6C63FF), Color(0xFF5B5FEF)],
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFF6C63FF).withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 3),
-                                )
-                              ],
+                          Text(
+                            _selectedRoomName ?? '',
+                            style: const TextStyle(
+                              fontFamily: 'googlesans',
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
                             ),
-                            child: Center(
-                              child: Text(
-                                initials,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontFamily: 'googlesans',
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  fName,
-                                  style: const TextStyle(
-                                    fontFamily: 'googlesans',
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF6C63FF).withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    fDesignation,
-                                    style: const TextStyle(
-                                      fontFamily: 'googlesans',
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                      color: Color(0xFF6C63FF),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  fDept,
-                                  style: TextStyle(
-                                    fontFamily: 'googlesans',
-                                    fontSize: 11,
-                                    color: Colors.grey[600],
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: () async {
-                              final Uri emailUri = Uri(
-                                scheme: 'mailto',
-                                path: fEmail,
-                                queryParameters: {
-                                  'subject': 'Inquiry from UniMap app',
-                                },
-                              );
-                              if (await canLaunchUrl(emailUri)) {
-                                await launchUrl(emailUri);
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Could not launch email app for $fEmail'),
-                                  ),
-                                );
-                              }
-                            },
-                            child: Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: const Color(0xFF6C63FF).withOpacity(0.15),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.05),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  )
-                                ],
-                              ),
-                              child: const Icon(
-                                Icons.mail_rounded,
-                                color: Color(0xFF6C63FF),
-                                size: 18,
-                              ),
+                          Text(
+                            floorLabel,
+                            style: const TextStyle(
+                              fontFamily: 'googlesans',
+                              fontSize: 12,
+                              color: Colors.black45,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  ],
-                );
-              }
-
-              return Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6C63FF).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.location_on_rounded, color: Color(0xFF6C63FF)),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _selectedRoomName ?? '',
-                          style: const TextStyle(
-                            fontFamily: 'googlesans',
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
+                    IconButton(
+                      icon: Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          shape: BoxShape.circle,
                         ),
-                        Text(
-                          description.isNotEmpty ? description : 'Assam Don Bosco University',
-                          style: const TextStyle(
-                            fontFamily: 'googlesans',
-                            fontSize: 12,
-                            color: Colors.black45,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded, color: Colors.black38),
-                    onPressed: () {
-                      setState(() {
-                        _selectedRoomName = null;
-                        _selectedRoomCentroid = null;
-                        _selectedRoomFloor = null;
-                        _isNavigating = false; 
-                        _directionSteps = [];
-                      });
-                      _mapKey.currentState?.setRoute(null);
-                    },
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              if (hasSteps) ...[
-                Expanded(
-                  child: SizedBox(
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: _showAllStepsBottomSheet,
-                      icon: const Icon(Icons.map_rounded, color: Color(0xFF6C63FF)),
-                      label: const Text(
-                        'Full Steps',
-                        style: TextStyle(
-                          fontFamily: 'googlesans',
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                          color: Color(0xFF6C63FF),
-                        ),
+                        child: const Icon(Icons.close_rounded, color: Colors.black54, size: 17),
                       ),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFF6C63FF), width: 1.5),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-              ],
-              Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      if (_isNavigating) {
+                      onPressed: () {
                         setState(() {
+                          _selectedRoomName = null;
+                          _selectedRoomCentroid = null;
+                          _selectedRoomFloor = null;
                           _isNavigating = false;
                           _directionSteps = [];
                         });
                         _mapKey.currentState?.setRoute(null);
-                      } else {
-                        // Check Geofence before starting navigation
-                        if (_currentLocation == null && !_geofenceBypass) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Acquiring precise GPS location...'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                          _getCurrentLocation().then((_) {
-                            if (!_checkGeofence()) {
-                              _showGeofenceRestrictionSheet();
-                            } else if (_selectedRoomCentroid != null) {
-                              setState(() {
-                                _isNavigating = true;
-                              });
-                              _mapKey.currentState?.showDirectionsTo(
-                                _selectedRoomCentroid!,
-                                destinationFloor: _selectedRoomFloor,
-                              );
-                            }
-                          });
-                          return;
-                        }
-
-                        if (!_checkGeofence()) {
-                          _showGeofenceRestrictionSheet();
-                          return;
-                        }
-
-                        if (_selectedRoomCentroid != null) {
-                          setState(() {
-                            _isNavigating = true;
-                          });
-                          _mapKey.currentState?.showDirectionsTo(
-                            _selectedRoomCentroid!,
-                            destinationFloor: _selectedRoomFloor,
-                          );
-                        }
-                      }
-                    },
-                    icon: Icon(
-                      _isNavigating ? Icons.close_rounded : Icons.directions_rounded,
-                      color: Colors.white,
-                    ),         
-                    label: Text(
-                      _isNavigating ? 'Exit Navigation' : 'Directions',
-                      style: const TextStyle(
-                        fontFamily: 'googlesans',
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        color: Colors.white,
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Divider(height: 1, color: Colors.black12),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          if (_selectedRoomCentroid != null) {
+                            setState(() => _isNavigating = true);
+                            _mapKey.currentState?.showDirectionsTo(
+                              _selectedRoomCentroid!,
+                              destinationFloor: _selectedRoomFloor,
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.directions_rounded, color: Colors.white, size: 18),
+                        label: const Text(
+                          'Directions',
+                          style: TextStyle(
+                            fontFamily: 'googlesans',
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF3B5BDB),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          elevation: 0,
+                        ),
                       ),
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _isNavigating ? const Color(0xFFD9534F) : const Color(0xFF6C63FF),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          if (_selectedRoomCentroid != null) {
+                            setState(() => _isNavigating = true);
+                            _mapKey.currentState?.showDirectionsTo(
+                              _selectedRoomCentroid!,
+                              destinationFloor: _selectedRoomFloor,
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 18),
+                        label: const Text(
+                          'Start',
+                          style: TextStyle(
+                            fontFamily: 'googlesans',
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF3B5BDB),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          elevation: 0,
+                        ),
+                      ),
                     ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    height: 130,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: isFacultyProfile ? const Color(0xFF3B5BDB) : const Color(0xFFBDD7FF),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: isFacultyProfile
+                        ? _buildFacultyImageCard(parts)
+                        : Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.image_outlined, color: Colors.blue[300], size: 36),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _selectedRoomName ?? '',
+                                  style: TextStyle(
+                                    fontFamily: 'googlesans',
+                                    color: Colors.blue[400],
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.description_outlined, color: Colors.grey[500], size: 22),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          (description.isNotEmpty && !isFacultyProfile)
+                              ? description
+                              : isFacultyProfile && parts.length > 2
+                                  ? '${parts[1]}, ${parts[2]}'
+                                  : 'No description available.',
+                          style: TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFacultyImageCard(List<String> parts) {
+    final fName = parts[0];
+    final fDesignation = parts.length > 1 ? parts[1] : '';
+    final fDept = parts.length > 2 ? parts[2] : '';
+    final fEmail = parts.length > 3 ? parts[3] : '';
+    String initials = '';
+    final cleanName = fName.replaceAll('Dr. ', '').replaceAll('Prof. ', '').trim();
+    final nameParts = cleanName.split(' ');
+    if (nameParts.isNotEmpty) {
+      initials += nameParts[0][0];
+      if (nameParts.length > 1) initials += nameParts[1][0];
+    }
+    initials = initials.toUpperCase();
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 28,
+            backgroundColor: Colors.white.withOpacity(0.25),
+            child: Text(initials,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'googlesans')),
           ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(fName,
+                    style: const TextStyle(
+                        fontFamily: 'googlesans',
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white)),
+                if (fDesignation.isNotEmpty)
+                  Text(fDesignation,
+                      style: const TextStyle(
+                          fontFamily: 'googlesans', fontSize: 12, color: Colors.white70)),
+                if (fDept.isNotEmpty)
+                  Text(fDept,
+                      style: const TextStyle(
+                          fontFamily: 'googlesans', fontSize: 11, color: Colors.white60),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+          if (fEmail.isNotEmpty)
+            GestureDetector(
+              onTap: () async {
+                final uri = Uri(
+                    scheme: 'mailto',
+                    path: fEmail,
+                    queryParameters: {'subject': 'Inquiry from UniMap'});
+                if (await canLaunchUrl(uri)) await launchUrl(uri);
+              },
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+                child: const Icon(Icons.mail_rounded, color: Colors.white, size: 19),
+              ),
+            ),
         ],
       ),
     );
