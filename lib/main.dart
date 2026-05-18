@@ -50,9 +50,10 @@ import 'upload_rooms.dart'; // Import the upload script
       return MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: ThemeData(fontFamily: 'googlesans'),
-        home: const LoadingWrapper(
-          child: AuthWrapper(),
-        ),
+        initialRoute: '/',
+        routes: {
+          '/': (context) => const LoadingWrapper(child: AuthWrapper()),
+        },
       );
     }
   }

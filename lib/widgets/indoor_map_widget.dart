@@ -13,6 +13,7 @@ class IndoorMapWidget extends StatefulWidget {
   final LatLng? userLocation;
   final double heading;
   final Function(String name, LatLng centroid)? onRoomSelected;
+  final Function(List<NavPoint> path)? onRouteCalculated;
 
   const IndoorMapWidget({
     super.key,
@@ -20,6 +21,7 @@ class IndoorMapWidget extends StatefulWidget {
     this.userLocation,
     this.heading = 0,
     this.onRoomSelected,
+    this.onRouteCalculated,
     this.highlightType,
   });
 
@@ -620,6 +622,8 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     }
   }
 
+  List<PathNode> get globalNodes => _router.nodes;
+
   void showDirectionsTo(LatLng destination, {int? destinationFloor, bool accessibleRoute = false}) {
     if (widget.userLocation == null) return;
     
@@ -638,6 +642,10 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     final path = _router.findPath(start, end, accessibleRoute: accessibleRoute);
     _currentFullRoute = path;
     _updateRouteLayer();
+
+    if (widget.onRouteCalculated != null && path != null) {
+      widget.onRouteCalculated!(path);
+    }
   }
 
   void _updateRouteLayer() {

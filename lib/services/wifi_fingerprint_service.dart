@@ -6,41 +6,46 @@ class WifiFingerprintService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   Future<bool> requestPermissions() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.location,
-      Permission.locationWhenInUse,
-    ].request();
-
-    bool granted = statuses.values.every((status) => status.isGranted);
-    return granted;
+    try {
+      final status = await Permission.location.request();
+      return status.isGranted;
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<Map<String, double>> collectWifiVector({int scanCount = 3}) async {
     Map<String, List<int>> rssiData = {};
 
     for (int i = 0; i < scanCount; i++) {
-      final canScan = await WiFiScan.instance.canStartScan(askPermissions: true);
-      if (canScan != CanStartScan.yes) {
-        throw Exception("Cannot start WiFi scan: $canScan");
-      }
-
-      await WiFiScan.instance.startScan();
-      
-      // Wait for scan to complete (typically takes a few seconds)
-      await Future.delayed(const Duration(seconds: 2));
-
-      final canGetResults = await WiFiScan.instance.canGetScannedResults(askPermissions: true);
-      if (canGetResults == CanGetScannedResults.yes) {
-        final results = await WiFiScan.instance.getScannedResults();
-        for (var network in results) {
-          if (!rssiData.containsKey(network.bssid)) {
-            rssiData[network.bssid] = [];
-          }
-          rssiData[network.bssid]!.add(network.level);
+      try {
+        final canScan = await WiFiScan.instance.canStartScan(askPermissions: true);
+        if (canScan == CanStartScan.yes) {
+          await WiFiScan.instance.startScan();
+          // Wait for scan to complete
+          await Future.delayed(const Duration(seconds: 2));
+        } else {
+          // If rate limited or not supported, wait a bit and try to get cached results
+          await Future.delayed(const Duration(seconds: 1));
         }
-      } else {
-        throw Exception("Cannot get WiFi scan results: $canGetResults");
+
+        final canGetResults = await WiFiScan.instance.canGetScannedResults(askPermissions: true);
+        if (canGetResults == CanGetScannedResults.yes) {
+          final results = await WiFiScan.instance.getScannedResults();
+          for (var network in results) {
+            if (!rssiData.containsKey(network.bssid)) {
+              rssiData[network.bssid] = [];
+            }
+            rssiData[network.bssid]!.add(network.level);
+          }
+        }
+      } catch (e) {
+        // Ignore individual scan errors, continue to the next scan attempt
       }
+    }
+
+    if (rssiData.isEmpty) {
+      throw Exception("No WiFi networks found. Check if location services are enabled.");
     }
 
     // Average the RSSI values

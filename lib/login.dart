@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'homescreen.dart';
 import 'profile_screens.dart';
 import 'utils.dart';
+import 'dart:ui' as ui;
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -75,10 +76,11 @@ class _LoginState extends State<Login> {
         password: password,
       );
 
-      if (mounted) {
-        Navigator.pushReplacement(
+            if (mounted) {
+        Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
+          (route) => false,
         );
       }
     } on FirebaseAuthException catch (e) {
@@ -240,6 +242,27 @@ class _LoginState extends State<Login> {
                 'assets/images/adbuLogo.png',
                 width: 145,
                 height: 145,
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 16,
+              left: 20,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(30),
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.25),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black, size: 20),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ),
+                ),
               ),
             ),
           ],

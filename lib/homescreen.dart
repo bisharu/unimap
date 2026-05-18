@@ -18,6 +18,8 @@ import 'skeleton.dart';
 import 'filter_screen.dart';
 import 'dart:ui' as ui;
 import 'services/wifi_fingerprint_service.dart';
+import 'utils/directions_helper.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -48,6 +50,12 @@ class _HomeScreenState extends State<HomeScreen>
   // Compass and Connectivity
   double _heading = 0;
   bool _isOffline = false;
+  List<DirectionStep> _directionSteps = [];
+
+  // Geofencing security state variables
+  bool _geofenceBypass = false;
+  int _devTapCount = 0;
+  DateTime? _lastDevTap;
   StreamSubscription? _connectivitySubscription;
   StreamSubscription? _compassSubscription;
   StreamSubscription<Position>? _positionSubscription;
@@ -58,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen>
   final WifiFingerprintService _fingerprintService = WifiFingerprintService();
   bool _isCalibrationMode = false;
   bool _isRecordingFingerprint = false;
+  bool _isNavigating = false; // Tracks whether map routing is currently active
 
   @override
   void initState() {
@@ -101,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen>
     _loadAllRoomsData();
     _loadRecentSearches();
     _loadCalibrationMode();
+    _seedFacultyCabins(); // Self-healing background faculty seeder
   }
 
   Future<void> _loadCalibrationMode() async {
@@ -640,8 +650,10 @@ class _HomeScreenState extends State<HomeScreen>
       systemNavigationBarColor: Colors.transparent,
     ));
 
+    final bool hasSearchText = _searchQuery.isNotEmpty || _searchController.text.isNotEmpty;
+
     return PopScope(
-      canPop: !_isSearchFocused && _activeFilter == null && _selectedRoomName == null,
+      canPop: !_isSearchFocused && _activeFilter == null && _selectedRoomName == null && !_isNavigating && !hasSearchText,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
 
@@ -653,21 +665,33 @@ class _HomeScreenState extends State<HomeScreen>
             _searchController.clear();
             _searchQuery = '';
             _mapKey.currentState?.setHighlight(null);
-          } else if (_activeFilter != null) {
-            // 2. Clear Active Filter
-            _activeFilter = null;
-            _mapKey.currentState?.setHighlight(null);
-            _searchQuery = '';
-            _searchController.clear();
+          } else if (_isNavigating) {
+            // 2. Exit Map Navigation (clear active route path)
+            _isNavigating = false;
+            _directionSteps = [];
+            _mapKey.currentState?.setRoute(null);
           } else if (_selectedRoomName != null) {
             // 3. Clear Room Selection
             _selectedRoomName = null;
             _selectedRoomCentroid = null;
             _searchQuery = '';
             _searchController.clear();
+            _selectedRoomFloor = null;
+          } else if (_activeFilter != null) {
+            // 4. Clear Active Filter
+            _activeFilter = null;
+            _mapKey.currentState?.setHighlight(null);
+            _searchQuery = '';
+            _searchController.clear();
+          } else if (hasSearchText) {
+            // 5. Clear Search Bar text & results
+            _searchQuery = '';
+            _searchController.clear();
+            _mapKey.currentState?.setHighlight(null);
           }
         });
       },
+
       child: Scaffold(
         key: _scaffoldKey,
         backgroundColor: Colors.transparent,
@@ -702,6 +726,14 @@ class _HomeScreenState extends State<HomeScreen>
                     _selectedRoomName = name;
                     _selectedRoomCentroid = centroid;
                     _selectedRoomFloor = room?.floor;
+                    _isNavigating = false; 
+                    _directionSteps = [];
+                  });
+                },
+                onRouteCalculated: (path) {
+                  final nodes = _mapKey.currentState?.globalNodes ?? [];
+                  setState(() {
+                    _directionSteps = DirectionsHelper.generateDirections(path, nodes);
                   });
                 },
               ),
@@ -1463,6 +1495,7 @@ class _HomeScreenState extends State<HomeScreen>
             _selectedRoomCentroid = room.centroid;
             _selectedRoomFloor = room.floor;
             _selectedFloor = room.floor; // Update the floor selector
+            _isNavigating = false; 
           });
 
           // Save to recent searches
@@ -1475,7 +1508,527 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Future<void> _seedFacultyCabins() async {
+    // A secure, structured map of Assam Don Bosco University faculty details keyed by cabin room number
+    final Map<int, Map<String, String>> facultySeedData = {
+      117: {
+        'name': 'Dr. Pranab Das',
+        'designation': 'Associate Professor & HOD',
+        'dept': 'Dept. of Computer Science & Engineering',
+        'email': 'pranab.das@dbuniversity.ac.in',
+      },
+      118: {
+        'name': 'Prof. Sonia Sharma',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Computer Science & Engineering',
+        'email': 'sonia.sharma@dbuniversity.ac.in',
+      },
+      119: {
+        'name': 'Dr. Amit Barua',
+        'designation': 'Associate Professor',
+        'dept': 'Dept. of Electrical & Electronics',
+        'email': 'amit.barua@dbuniversity.ac.in',
+      },
+      120: {
+        'name': 'Prof. Sonia Sen',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Electronics & Communications',
+        'email': 'sonia.sen@dbuniversity.ac.in',
+      },
+      121: {
+        'name': 'Dr. Manas Jyoti',
+        'designation': 'Professor',
+        'dept': 'Dept. of Civil Engineering',
+        'email': 'manas.jyoti@dbuniversity.ac.in',
+      },
+      122: {
+        'name': 'Prof. Rishabh Dev',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Information Technology',
+        'email': 'rishabh.dev@dbuniversity.ac.in',
+      },
+      216: {
+        'name': 'Dr. Uzzal Sharma',
+        'designation': 'Associate Professor & HOD',
+        'dept': 'Dept. of Computer Applications',
+        'email': 'uzzal.sharma@dbuniversity.ac.in',
+      },
+      217: {
+        'name': 'Dr. Bobby Sharma',
+        'designation': 'Associate Professor',
+        'dept': 'Dept. of Computer Science & Engineering',
+        'email': 'bobby.sharma@dbuniversity.ac.in',
+      },
+      218: {
+        'name': 'Prof. Gyani Sharma',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Computer Applications',
+        'email': 'gyani.sharma@dbuniversity.ac.in',
+      },
+      219: {
+        'name': 'Prof. Vijay Prasad',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Computer Applications',
+        'email': 'vijay.prasad@dbuniversity.ac.in',
+      },
+      220: {
+        'name': 'Dr. Smriti Priya',
+        'designation': 'Professor',
+        'dept': 'Dept. of Civil Engineering',
+        'email': 'smriti.priya@dbuniversity.ac.in',
+      },
+      221: {
+        'name': 'Prof. Hemant Kalita',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Civil Engineering',
+        'email': 'hemant.kalita@dbuniversity.ac.in',
+      },
+      317: {
+        'name': 'Dr. Bikramjit Goswami',
+        'designation': 'Associate Professor',
+        'dept': 'Dept. of Electrical & Electronics',
+        'email': 'bikramjit.goswami@dbuniversity.ac.in',
+      },
+      318: {
+        'name': 'Prof. P. Joseph',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Electrical & Electronics',
+        'email': 'joseph.p@dbuniversity.ac.in',
+      },
+      319: {
+        'name': 'Dr. Sunandan Baruah',
+        'designation': 'Professor & Dean',
+        'dept': 'Dept. of Engineering & Technology',
+        'email': 'sunandan.baruah@dbuniversity.ac.in',
+      },
+      320: {
+        'name': 'Prof. Nupur Choudhury',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Electronics & Communications',
+        'email': 'nupur.choudhury@dbuniversity.ac.in',
+      },
+      321: {
+        'name': 'Dr. Shakuntala Laskar',
+        'designation': 'Professor',
+        'dept': 'Dept. of Electronics & Communications',
+        'email': 'shakuntala.laskar@dbuniversity.ac.in',
+      },
+      322: {
+        'name': 'Prof. Gitanjali Devi',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Humanities & Social Sciences',
+        'email': 'gitanjali.devi@dbuniversity.ac.in',
+      },
+      324: {
+        'name': 'Dr. Monmayuri Goswami',
+        'designation': 'Associate Professor',
+        'dept': 'Dept. of Basic Sciences',
+        'email': 'monmayuri.goswami@dbuniversity.ac.in',
+      },
+      325: {
+        'name': 'Prof. Subra Mukherjee',
+        'designation': 'Assistant Professor',
+        'dept': 'Dept. of Basic Sciences',
+        'email': 'subra.mukherjee@dbuniversity.ac.in',
+      },
+    };
+
+    try {
+      // Query all rooms of type 'cabin' from the live Firestore locations collection
+      final snapshot = await FirebaseFirestore.instance
+          .collection('locations')
+          .where('r_type', isEqualTo: 'cabin')
+          .get();
+
+      if (snapshot.docs.isEmpty) return;
+
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+      bool hasUpdates = false;
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final int roomNo = data['r_no'] ?? 0;
+        final String currentDescription = data['Description'] ?? '';
+
+        // Only seed if the room matches a room number in our seed data
+        if (facultySeedData.containsKey(roomNo)) {
+          final fInfo = facultySeedData[roomNo]!;
+          final String seedDescription = '${fInfo['name']}|${fInfo['designation']}|${fInfo['dept']}|${fInfo['email']}';
+
+          // Self-Healing Protection: Only update if the current description is generic/fallback
+          if (currentDescription.contains('Room FACULTY CABIN') || 
+              currentDescription.contains('Room RESEARCH SCHOLAR') || 
+              currentDescription.isEmpty) {
+            
+            batch.update(doc.reference, {
+              'Description': seedDescription,
+            });
+            hasUpdates = true;
+          }
+        }
+      }
+
+      if (hasUpdates) {
+        await batch.commit();
+        debugPrint("🔍 [Faculty Seeder] Successfully seeded live Firestore cabin profiles!");
+      } else {
+        debugPrint("🔍 [Faculty Seeder] Live database is already seeded. Skipping updates.");
+      }
+    } catch (e) {
+      debugPrint("🔍 [Faculty Seeder] Error seeding faculty cabins: $e");
+    }
+  }
+
+  bool _checkGeofence() {
+    debugPrint("???? [Geofence Check] Bypass active: $_geofenceBypass");
+    if (_geofenceBypass) return true;
+    if (_currentLocation == null) {
+      debugPrint("???? [Geofence Check] Location is null, blocking.");
+      return false;
+    }
+    
+    final campusCenter = const LatLng(26.1297, 91.6197);
+    final distance = const Distance().as(
+      LengthUnit.Meter,
+      _currentLocation!,
+      campusCenter,
+    );
+    
+    debugPrint("???? [Geofence Check] User Coord: ${_currentLocation!.latitude}, ${_currentLocation!.longitude}");
+    debugPrint("???? [Geofence Check] Campus Center: ${campusCenter.latitude}, ${campusCenter.longitude}");
+    debugPrint("???? [Geofence Check] Calculated Distance: $distance meters. Limit: 200.0 meters.");
+    
+    final allowed = distance <= 200.0;
+    debugPrint("???? [Geofence Check] Decision: ${allowed ? 'ALLOWED' : 'BLOCKED'}");
+    return allowed;
+  }
+
+  double _getDistanceToCampus() {
+    if (_currentLocation == null) return 0.0;
+    final campusCenter = const LatLng(26.1297, 91.6197);
+    return const Distance().as(
+      LengthUnit.Meter,
+      _currentLocation!,
+      campusCenter,
+    );
+  }
+
+  void _showGeofenceRestrictionSheet() {
+    _devTapCount = 0; // reset tap count when sheet opens
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final distance = _getDistanceToCampus();
+            final distanceStr = distance <= 0.0 
+                ? 'acquiring coordinates...' 
+                : distance >= 1000 
+                    ? '${(distance / 1000).toStringAsFixed(2)} km' 
+                    : '${distance.round()} meters';
+                 
+            return Container(
+              padding: const EdgeInsets.all(24),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      width: 40,
+                      height: 4.5,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {
+                      final now = DateTime.now();
+                      if (_lastDevTap == null || now.difference(_lastDevTap!) < const Duration(seconds: 2)) {
+                        _devTapCount++;
+                      } else {
+                        _devTapCount = 1;
+                      }
+                      _lastDevTap = now;
+                      
+                      if (_devTapCount >= 5) {
+                        setState(() {
+                          _geofenceBypass = true;
+                        });
+                        Navigator.pop(context); // close warning sheet
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Developer Mode Activated: Geofence Bypassed!'),
+                            backgroundColor: Color(0xFF6C63FF),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      }
+                    },
+                    child: Container(
+                      width: 72,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: Colors.red[50]!,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.gpp_bad_rounded,
+                        color: Colors.redAccent,
+                        size: 40,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                     'Access Restricted',
+                     style: TextStyle(
+                       fontFamily: 'googlesans',
+                       fontSize: 20,
+                       fontWeight: FontWeight.bold,
+                       color: Colors.black87,
+                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                     'To ensure safe and secure access, real-time map directions are restricted to users physically within the Assam Don Bosco University campus.',
+                     textAlign: TextAlign.center,
+                     style: TextStyle(
+                       fontFamily: 'googlesans',
+                       fontSize: 14,
+                       color: Colors.grey[600],
+                       height: 1.4,
+                     ),
+                  ),
+                  const Padding(
+                     padding: EdgeInsets.symmetric(vertical: 16),
+                     child: Divider(color: Colors.black12),
+                  ),
+                  Row(
+                     mainAxisAlignment: MainAxisAlignment.center,
+                     children: [
+                       const Icon(Icons.location_off_rounded, color: Colors.black38, size: 20),
+                       const SizedBox(width: 8),
+                       Text(
+                         'Your location is $distanceStr away.',
+                         style: const TextStyle(
+                           fontFamily: 'googlesans',
+                           fontSize: 14,
+                           fontWeight: FontWeight.bold,
+                           color: Colors.black54,
+                         ),
+                       ),
+                     ],
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                     width: double.infinity,
+                     height: 48,
+                     child: ElevatedButton.icon(
+                       onPressed: () async {
+                         // Refresh location using Geolocator
+                         try {
+                           final position = await Geolocator.getCurrentPosition(
+                             locationSettings: const LocationSettings(
+                               accuracy: LocationAccuracy.high,
+                               timeLimit: Duration(seconds: 6),
+                             ),
+                           );
+                           setState(() {
+                             _currentLocation = LatLng(position.latitude, position.longitude);
+                           });
+                           if (_checkGeofence()) {
+                             Navigator.pop(context); // close warning sheet
+                             ScaffoldMessenger.of(context).showSnackBar(
+                               const SnackBar(
+                                 content: Text('Welcome back to campus! Access granted.'),
+                                 backgroundColor: Colors.green,
+                                 behavior: SnackBarBehavior.floating,
+                               ),
+                             );
+                           } else {
+                             // Update local state inside bottom sheet
+                             setModalState(() {});
+                           }
+                         } catch (e) {
+                           ScaffoldMessenger.of(context).showSnackBar(
+                             const SnackBar(
+                               content: Text('Could not acquire precision GPS coordinates. Try again.'),
+                               backgroundColor: Colors.redAccent,
+                             ),
+                           );
+                         }
+                       },
+                       icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+                       label: const Text(
+                         'Refresh Location',
+                         style: TextStyle(
+                           fontFamily: 'googlesans',
+                           fontWeight: FontWeight.bold,
+                           color: Colors.white,
+                         ),
+                       ),
+                       style: ElevatedButton.styleFrom(
+                         backgroundColor: const Color(0xFF6C63FF),
+                         shape: RoundedRectangleBorder(
+                           borderRadius: BorderRadius.circular(12),
+                         ),
+                         elevation: 0,
+                       ),
+                     ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showAllStepsBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.75,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 12),
+                  width: 40,
+                  height: 4.5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Text(
+                  'Route Directions',
+                  style: TextStyle(
+                    fontFamily: 'googlesans',
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
+              const Divider(),
+              Expanded(
+                child: _directionSteps.isEmpty
+                    ? const Center(child: Text("Calculating route directions..."))
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        itemCount: _directionSteps.length,
+                        itemBuilder: (context, index) {
+                          final step = _directionSteps[index];
+                          final isLast = index == _directionSteps.length - 1;
+                          final isFirst = index == 0;
+                          return IntrinsicHeight(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Column(
+                                  children: [
+                                    Container(
+                                      width: 32,
+                                      height: 32,
+                                      decoration: BoxDecoration(
+                                        color: isFirst 
+                                            ? const Color(0xFF6C63FF).withValues(alpha: 0.1) 
+                                            : isLast 
+                                                ? Colors.green.withValues(alpha: 0.1)
+                                                : Colors.grey[100],
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        step.icon, 
+                                        color: isFirst 
+                                            ? const Color(0xFF6C63FF) 
+                                            : isLast 
+                                                ? Colors.green 
+                                                : Colors.black54, 
+                                        size: 18
+                                      ),
+                                    ),
+                                    if (!isLast)
+                                      Expanded(
+                                        child: VerticalDivider(
+                                          color: Colors.grey[300],
+                                          thickness: 2,
+                                          width: 32,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 24),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          step.instruction,
+                                          style: TextStyle(
+                                            fontFamily: 'googlesans',
+                                            fontSize: 15,
+                                            fontWeight: (isFirst || isLast) ? FontWeight.bold : FontWeight.w500,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        if (step.distance > 0) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'For ${step.distance.round()} m',
+                                            style: const TextStyle(
+                                              fontFamily: 'googlesans',
+                                              fontSize: 12,
+                                              color: Colors.black45,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildDirectionsPanel() {
+    final hasSteps = _isNavigating && _directionSteps.isNotEmpty;
+    final nextStep = hasSteps ? _directionSteps.first : null;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1492,84 +2045,451 @@ class _HomeScreenState extends State<HomeScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
+          if (hasSteps && nextStep != null) ...[
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(nextStep.icon, color: const Color(0xFF6C63FF)),
                 ),
-                child: const Icon(Icons.location_on_rounded, color: Color(0xFF6C63FF)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Next Step',
+                        style: TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF6C63FF),
+                        ),
+                      ),
+                      Text(
+                        nextStep.instruction,
+                        style: const TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (nextStep.distance > 0)
+                        Text(
+                          'For ${nextStep.distance.round()} meters',
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 12,
+                            color: Colors.black45,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.format_list_bulleted_rounded, color: Color(0xFF6C63FF)),
+                  onPressed: _showAllStepsBottomSheet,
+                  tooltip: 'Show entire path instructions',
+                ),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Divider(height: 1, color: Colors.black12),
+            ),
+          ],
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('locations')
+                .where('L_name', isEqualTo: _selectedRoomName)
+                .limit(1)
+                .snapshots(),
+            builder: (context, snapshot) {
+              String description = '';
+              String rType = '';
+              int rNo = 0;
+
+              if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                final doc = snapshot.data!.docs.first;
+                final data = doc.data() as Map<String, dynamic>;
+                description = data['Description'] ?? '';
+                rType = data['r_type'] ?? '';
+                rNo = data['r_no'] ?? 0;
+              }
+
+              final isCabin = rType.toLowerCase() == 'cabin';
+              final parts = description.split('|');
+              final isFacultyProfile = isCabin && parts.length >= 4;
+
+              if (isFacultyProfile) {
+                final String fName = parts[0];
+                final String fDesignation = parts[1];
+                final String fDept = parts[2];
+                final String fEmail = parts[3];
+
+                String initials = '';
+                final cleanName = fName.replaceAll('Dr. ', '').replaceAll('Prof. ', '').trim();
+                final nameParts = cleanName.split(' ');
+                if (nameParts.isNotEmpty) {
+                  initials += nameParts[0][0];
+                  if (nameParts.length > 1) {
+                    initials += nameParts[1][0];
+                  }
+                }
+                initials = initials.toUpperCase();
+
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _selectedRoomName ?? '',
-                      style: const TextStyle(
-                        fontFamily: 'googlesans',
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.school_rounded,
+                              color: Color(0xFF6C63FF),
+                              size: 18,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'FACULTY CABIN $rNo',
+                              style: const TextStyle(
+                                fontFamily: 'googlesans',
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF6C63FF),
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          constraints: const BoxConstraints(),
+                          padding: EdgeInsets.zero,
+                          icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _selectedRoomName = null;
+                              _selectedRoomCentroid = null;
+                              _selectedRoomFloor = null;
+                              _isNavigating = false; 
+                              _directionSteps = [];
+                            });
+                            _mapKey.currentState?.setRoute(null);
+                          },
+                        ),
+                      ],
                     ),
-                    const Text(
-                      'Assam Don Bosco University',
-                      style: TextStyle(
-                        fontFamily: 'googlesans',
-                        fontSize: 12,
-                        color: Colors.black45,
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            const Color(0xFF6C63FF).withOpacity(0.08),
+                            const Color(0xFF5B5FEF).withOpacity(0.03),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: const Color(0xFF6C63FF).withOpacity(0.15),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF6C63FF), Color(0xFF5B5FEF)],
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF6C63FF).withOpacity(0.3),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                )
+                              ],
+                            ),
+                            child: Center(
+                              child: Text(
+                                initials,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontFamily: 'googlesans',
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  fName,
+                                  style: const TextStyle(
+                                    fontFamily: 'googlesans',
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF6C63FF).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    fDesignation,
+                                    style: const TextStyle(
+                                      fontFamily: 'googlesans',
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF6C63FF),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  fDept,
+                                  style: TextStyle(
+                                    fontFamily: 'googlesans',
+                                    fontSize: 11,
+                                    color: Colors.grey[600],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () async {
+                              final Uri emailUri = Uri(
+                                scheme: 'mailto',
+                                path: fEmail,
+                                queryParameters: {
+                                  'subject': 'Inquiry from UniMap app',
+                                },
+                              );
+                              if (await canLaunchUrl(emailUri)) {
+                                await launchUrl(emailUri);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Could not launch email app for $fEmail'),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: const Color(0xFF6C63FF).withOpacity(0.15),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  )
+                                ],
+                              ),
+                              child: const Icon(
+                                Icons.mail_rounded,
+                                color: Color(0xFF6C63FF),
+                                size: 18,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close_rounded, color: Colors.black38),
-                onPressed: () {
-                  setState(() {
-                    _selectedRoomName = null;
-                    _selectedRoomCentroid = null;
-                    _selectedRoomFloor = null;
-                  });
-                  _mapKey.currentState?.setRoute(null);
-                },
-              ),
-            ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6C63FF).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.location_on_rounded, color: Color(0xFF6C63FF)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _selectedRoomName ?? '',
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        Text(
+                          description.isNotEmpty ? description : 'Assam Don Bosco University',
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 12,
+                            color: Colors.black45,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.black38),
+                    onPressed: () {
+                      setState(() {
+                        _selectedRoomName = null;
+                        _selectedRoomCentroid = null;
+                        _selectedRoomFloor = null;
+                        _isNavigating = false; 
+                        _directionSteps = [];
+                      });
+                      _mapKey.currentState?.setRoute(null);
+                    },
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                if (_selectedRoomCentroid != null) {
-                  _mapKey.currentState?.showDirectionsTo(
-                    _selectedRoomCentroid!,
-                    destinationFloor: _selectedRoomFloor,
-                  );
-                }
-              },
-              icon: const Icon(Icons.directions_rounded, color: Colors.white),
-              label: const Text(
-                'Directions',
-                style: TextStyle(
-                  fontFamily: 'googlesans',
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                  color: Colors.white,
+          Row(
+            children: [
+              if (hasSteps) ...[
+                Expanded(
+                  child: SizedBox(
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: _showAllStepsBottomSheet,
+                      icon: const Icon(Icons.map_rounded, color: Color(0xFF6C63FF)),
+                      label: const Text(
+                        'Full Steps',
+                        style: TextStyle(
+                          fontFamily: 'googlesans',
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          color: Color(0xFF6C63FF),
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFF6C63FF), width: 1.5),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      if (_isNavigating) {
+                        setState(() {
+                          _isNavigating = false;
+                          _directionSteps = [];
+                        });
+                        _mapKey.currentState?.setRoute(null);
+                      } else {
+                        // Check Geofence before starting navigation
+                        if (_currentLocation == null && !_geofenceBypass) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Acquiring precise GPS location...'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                          _getCurrentLocation().then((_) {
+                            if (!_checkGeofence()) {
+                              _showGeofenceRestrictionSheet();
+                            } else if (_selectedRoomCentroid != null) {
+                              setState(() {
+                                _isNavigating = true;
+                              });
+                              _mapKey.currentState?.showDirectionsTo(
+                                _selectedRoomCentroid!,
+                                destinationFloor: _selectedRoomFloor,
+                              );
+                            }
+                          });
+                          return;
+                        }
+
+                        if (!_checkGeofence()) {
+                          _showGeofenceRestrictionSheet();
+                          return;
+                        }
+
+                        if (_selectedRoomCentroid != null) {
+                          setState(() {
+                            _isNavigating = true;
+                          });
+                          _mapKey.currentState?.showDirectionsTo(
+                            _selectedRoomCentroid!,
+                            destinationFloor: _selectedRoomFloor,
+                          );
+                        }
+                      }
+                    },
+                    icon: Icon(
+                      _isNavigating ? Icons.close_rounded : Icons.directions_rounded,
+                      color: Colors.white,
+                    ),         
+                    label: Text(
+                      _isNavigating ? 'Exit Navigation' : 'Directions',
+                      style: const TextStyle(
+                        fontFamily: 'googlesans',
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.white,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isNavigating ? const Color(0xFFD9534F) : const Color(0xFF6C63FF),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
+                  ),
                 ),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF6C63FF),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                elevation: 0,
-              ),
-            ),
+            ],
           ),
         ],
       ),
