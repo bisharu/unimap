@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'profile_screens.dart';
 import 'skeleton.dart';
+import 'ai_assistant_screen.dart';
+import 'homescreen.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -141,6 +143,9 @@ class _ProfilePageState extends State<ProfilePage> {
                   }),
                   _buildSwitchItem(Icons.wifi_tethering, 'Calibration Mode', _isCalibrationMode, _toggleCalibrationMode),
                 ],
+                const Divider(height: 24, indent: 24, endIndent: 24),
+                // AI Assistant entry — available to all users
+                _buildAiAssistantItem(context),
                 const Divider(height: 40, indent: 24, endIndent: 24),
                 _buildMenuItem(Icons.logout_rounded, 'Logout', 
                   color: const Color(0xFFD9534F), 
@@ -287,6 +292,88 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.black26),
       contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+    );
+  }
+
+  Widget _buildAiAssistantItem(BuildContext context) {
+    return GestureDetector(
+      onTap: () async {
+        final RoomSearchItem? selectedRoom = await Navigator.push<RoomSearchItem>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AIAssistantScreen(allRooms: const []),
+          ),
+        );
+        // If a room was deep-linked, pop profile page so user lands on the map
+        if (selectedRoom != null && context.mounted) {
+          Navigator.pop(context);
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF4F46E5), Color(0xFF06B6D4)],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF4F46E5).withOpacity(0.30),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // AI Icon
+            Container(
+              width: 40,
+              height: 40,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Image.asset(
+                'assets/images/aiIcon.png',
+                fit: BoxFit.contain,
+              ),
+            ),
+            const SizedBox(width: 14),
+            // Label + subtitle
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'UniMap AI Assistant',
+                    style: TextStyle(
+                      fontFamily: 'googlesans',
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Ask anything about the campus',
+                    style: TextStyle(
+                      fontFamily: 'googlesans',
+                      fontSize: 11,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white54, size: 16),
+          ],
+        ),
+      ),
     );
   }
 

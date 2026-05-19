@@ -125,6 +125,102 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       _highlightType = widget.highlightType;
       _updateMapObjects();
     }
+    if (oldWidget.userLocation != widget.userLocation && widget.userLocation != null) {
+      if (_currentFullRoute != null && _currentFullRoute!.isNotEmpty) {
+        _handleLocationUpdate(widget.userLocation!);
+      }
+    }
+  }
+
+  // To avoid spamming recalculations when GPS jitters, we track the last recalculation time
+  DateTime? _lastRecalculationTime;
+
+  void _handleLocationUpdate(LatLng newLocation) {
+    if (_currentFullRoute == null || _currentFullRoute!.isEmpty) return;
+    
+    // Only process points on the current floor where the user is
+    final List<NavPoint> currentFloorRoute = _currentFullRoute!
+        .where((p) => p.floor == widget.currentFloor)
+        .toList();
+
+    if (currentFloorRoute.isEmpty) return;
+
+    double minDistance = double.infinity;
+    int closestSegmentIndex = -1;
+    LatLng closestPointOnSegment = LatLng(currentFloorRoute.first.latitude, currentFloorRoute.first.longitude);
+
+    // Find the closest segment on the current floor's path
+    for (int i = 0; i < currentFloorRoute.length - 1; i++) {
+      final p1 = LatLng(currentFloorRoute[i].latitude, currentFloorRoute[i].longitude);
+      final p2 = LatLng(currentFloorRoute[i + 1].latitude, currentFloorRoute[i + 1].longitude);
+      
+      final projection = _projectPointOnSegment(newLocation, p1, p2);
+      final dist = _distanceBetweenPoints(newLocation, projection);
+      
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestSegmentIndex = i;
+        closestPointOnSegment = projection;
+      }
+    }
+
+    // minDistance is roughly in degrees. Let's convert to meters.
+    // 1 degree latitude ~ 111,320 meters
+    final distanceInMeters = minDistance * 111320.0;
+    
+    // Threshold for deviation in meters
+    const double deviationThreshold = 12.0;
+
+    if (distanceInMeters > deviationThreshold) {
+      // User deviated! Trigger recalculation (debounce by 3 seconds)
+      final now = DateTime.now();
+      if (_lastRecalculationTime == null || now.difference(_lastRecalculationTime!).inSeconds > 3) {
+        _lastRecalculationTime = now;
+        
+        // Original destination is the last point in the full route
+        final destPoint = _currentFullRoute!.last;
+        final destination = LatLng(destPoint.latitude, destPoint.longitude);
+        
+        // Recalculate route
+        showDirectionsTo(destination, destinationFloor: destPoint.floor);
+      }
+    } else if (closestSegmentIndex != -1) {
+      // User is on track! Trim the route to start from their current location.
+      // We rebuild the visible points to start exactly from where they are, 
+      // continuing through the rest of the current floor's route.
+      List<LatLng> trimmedPoints = [newLocation];
+      for (int i = closestSegmentIndex + 1; i < currentFloorRoute.length; i++) {
+        trimmedPoints.add(LatLng(currentFloorRoute[i].latitude, currentFloorRoute[i].longitude));
+      }
+      setRoute(trimmedPoints);
+    }
+  }
+
+  LatLng _projectPointOnSegment(LatLng p, LatLng v, LatLng w) {
+    final l2 = _distanceBetweenPointsSq(v, w);
+    if (l2 == 0) return v;
+    
+    // Consider the line extending the segment, parameterized as v + t (w - v).
+    // We find projection of point p onto the line. 
+    // It falls where t = [(p-v) . (w-v)] / |w-v|^2
+    var t = ((p.latitude - v.latitude) * (w.latitude - v.latitude) + 
+             (p.longitude - v.longitude) * (w.longitude - v.longitude)) / l2;
+             
+    // Clamp t to [0, 1] to ensure it falls on the segment
+    t = max(0, min(1, t));
+    
+    return LatLng(
+      v.latitude + t * (w.latitude - v.latitude),
+      v.longitude + t * (w.longitude - v.longitude)
+    );
+  }
+
+  double _distanceBetweenPointsSq(LatLng p1, LatLng p2) {
+    return pow(p1.latitude - p2.latitude, 2) + pow(p1.longitude - p2.longitude, 2).toDouble();
+  }
+
+  double _distanceBetweenPoints(LatLng p1, LatLng p2) {
+    return sqrt(_distanceBetweenPointsSq(p1, p2));
   }
 
   Future<void> _loadFloorPlan(int floor) async {
@@ -264,7 +360,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
               color: fillColor,
               borderColor: borderColor,
               borderStrokeWidth: borderWidth,
-              isFilled: true,
             ));
           } else {
             // For open LineStrings or unnamed structural features, use Polyline.
@@ -314,14 +409,14 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       final String type = m['type'];
       
       // Calculate screen position
-      final Point<double> pixel = _mapController.camera.project(point);
+      final Offset pixel = _mapController.camera.latLngToScreenOffset(point);
       
       // Vertical layout: wider and taller to allow full room names + room number
       const double w = 110;
       const double h = 85;
       
       final Rect rect = Rect.fromCenter(
-        center: Offset(pixel.x, pixel.y),
+        center: pixel,
         width: w,
         height: h,
       );
@@ -395,7 +490,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                 Text(
                   name,
                   style: TextStyle(
-                    fontSize: isSelected ? 11 : 9,
+                    fontSize: isSelected ? 12 : 10,
                     fontWeight: FontWeight.bold,
                     color: Colors.black87,
                     fontFamily: 'googlesans',
@@ -895,9 +990,13 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             maxZoom: 22.0,
             onTap: (_, point) => _handleMapTap(point),
             onPositionChanged: (pos, hasGesture) {
-              if (pos.zoom != null && (pos.zoom! - _currentZoom).abs() > 0.1) {
+              if (pos.zoom != null) {
+                final double oldZoom = _currentZoom;
                 _currentZoom = pos.zoom!;
-                _updateMapObjects();
+                final bool crossedLabelThreshold = (oldZoom > 19.0) != (_currentZoom > 19.0);
+                if ((_currentZoom - oldZoom).abs() > 0.05 || crossedLabelThreshold) {
+                  _updateMapObjects();
+                }
               }
             },
           ),
@@ -914,40 +1013,41 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             PolylineLayer(polylines: _routePolylines),
 
             // 🏫 University Annotation (pointing to the building)
-            MarkerLayer(
-              markers: [
-                Marker(
-                  point: _buildingCenter,
-                  width: 200,
-                  height: 100,
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4),
-                          ],
-                          border: Border.all(color: const Color(0xFF1E3A5F), width: 1),
-                        ),
-                        child: const Text(
-                          "Assam Don Bosco University",
-                          style: TextStyle(
-                            fontFamily: 'googlesans',
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                            color: Color(0xFF1E3A5F),
+            if (_currentZoom <= 19.0)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: _buildingCenter,
+                    width: 200,
+                    height: 100,
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4),
+                            ],
+                            border: Border.all(color: const Color(0xFF1E3A5F), width: 1),
+                          ),
+                          child: const Text(
+                            "Assam Don Bosco University",
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              color: Color(0xFF1E3A5F),
+                            ),
                           ),
                         ),
-                      ),
-                      const Icon(Icons.arrow_drop_down, color: Color(0xFF1E3A5F), size: 30),
-                    ],
+                        const Icon(Icons.arrow_drop_down, color: Color(0xFF1E3A5F), size: 30),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
             
             // User Location Marker (Google Maps style)
             if (widget.userLocation != null)

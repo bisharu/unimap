@@ -18,8 +18,10 @@ import 'skeleton.dart';
 import 'filter_screen.dart';
 import 'dart:ui' as ui;
 import 'services/wifi_fingerprint_service.dart';
+import 'services/wifi_positioning_service.dart';
 import 'utils/directions_helper.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'ai_assistant_screen.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -64,6 +66,10 @@ class _HomeScreenState extends State<HomeScreen>
   LatLng? _selectedRoomCentroid;
   int? _selectedRoomFloor;
   final WifiFingerprintService _fingerprintService = WifiFingerprintService();
+  final WifiPositioningService _wifiPositioningService = WifiPositioningService();
+  Timer? _wifiScanTimer;
+  bool _isIndoorPositioningEnabled = false;
+  bool _isCurrentlyIndoor = false;
   bool _isCalibrationMode = false;
   bool _isRecordingFingerprint = false;
   bool _isNavigating = false; // Tracks whether map routing is currently active
@@ -110,6 +116,7 @@ class _HomeScreenState extends State<HomeScreen>
     _loadAllRoomsData();
     _loadRecentSearches();
     _loadCalibrationMode();
+    _wifiPositioningService.fetchRadioMap();
     _seedFacultyCabins(); // Self-healing background faculty seeder
   }
 
@@ -280,6 +287,7 @@ class _HomeScreenState extends State<HomeScreen>
     _connectivitySubscription?.cancel();
     _compassSubscription?.cancel();
     _positionSubscription?.cancel();
+    _wifiScanTimer?.cancel();
     super.dispose();
   }
 
@@ -337,6 +345,9 @@ class _HomeScreenState extends State<HomeScreen>
           if (mounted) {
             // 5. Accuracy Filtering: Ignore points with very high error margins
             if (position.accuracy > 35) return;
+
+            // FUSION LOGIC: Ignore GPS updates if we are currently locked onto an indoor WiFi position
+            if (_isCurrentlyIndoor) return;
 
             setState(() {
               // 2. Exponential Moving Average Smoothing
@@ -755,7 +766,15 @@ class _HomeScreenState extends State<HomeScreen>
               child: _buildSearchOverlay(context),
             ),
 
-          // ── 3. COMPASS ─────────────────────────────────────────────────────
+          // ── 3. AI ICON BUTTON (above compass) ────────────────────────────
+          if (!_isSearchFocused)
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 200,
+              right: 16,
+              child: _buildAiIconButton(),
+            ),
+
+          // ── 3.5. COMPASS ───────────────────────────────────────────────────
           if (!_isSearchFocused)
             Positioned(
               bottom: MediaQuery.of(context).padding.bottom + 140, // Moved higher
@@ -769,6 +788,14 @@ class _HomeScreenState extends State<HomeScreen>
               bottom: MediaQuery.of(context).padding.bottom + 64, // Moved higher
               right: 16,
               child: _buildLocationButton(),
+            ),
+
+          // ── 4.5. INDOOR POSITIONING BUTTON (bottom left) ───────────────────
+          if (!_isSearchFocused)
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 64,
+              left: 16,
+              child: _buildIndoorPositioningButton(),
             ),
 
           // ── 5. OFFLINE OVERLAY ─────────────────────────────────────────────
@@ -843,6 +870,76 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
     );
+  }
+
+  Widget _buildIndoorPositioningButton() {
+    return FloatingActionButton.extended(
+      heroTag: 'indoor_pos_fab',
+      onPressed: _toggleIndoorPositioning,
+      backgroundColor: _isIndoorPositioningEnabled ? Colors.green : Colors.white,
+      icon: Icon(
+        Icons.wifi_find,
+        color: _isIndoorPositioningEnabled ? Colors.white : const Color(0xFF1E3A5F),
+      ),
+      label: Text(
+        _isIndoorPositioningEnabled ? "Indoor Mode: ON" : "Indoor Mode",
+        style: TextStyle(
+          color: _isIndoorPositioningEnabled ? Colors.white : const Color(0xFF1E3A5F),
+          fontWeight: FontWeight.bold,
+          fontFamily: 'googlesans',
+        ),
+      ),
+    );
+  }
+
+  void _toggleIndoorPositioning() {
+    setState(() {
+      _isIndoorPositioningEnabled = !_isIndoorPositioningEnabled;
+      if (_isIndoorPositioningEnabled) {
+        _showLocationSnackbar('📶 Indoor WiFi Positioning Enabled');
+        _startWifiScanning();
+      } else {
+        _isCurrentlyIndoor = false;
+        _wifiScanTimer?.cancel();
+        _showLocationSnackbar('🛰️ Switched to GPS Positioning');
+      }
+    });
+  }
+
+  void _startWifiScanning() {
+    _wifiScanTimer?.cancel();
+    _wifiScanTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (!_isIndoorPositioningEnabled) {
+        timer.cancel();
+        return;
+      }
+      
+      final liveVector = await _wifiPositioningService.performLiveScan();
+      if (liveVector != null) {
+        final estimatedRoom = _wifiPositioningService.estimateLocation(liveVector, maxDistanceThreshold: 45.0);
+        
+        if (estimatedRoom != null) {
+          final roomData = _allRooms.firstWhereOrNull((r) => r.name == estimatedRoom);
+          if (roomData != null && mounted) {
+            setState(() {
+              _isCurrentlyIndoor = true;
+              _currentLocation = roomData.centroid;
+              if (_selectedFloor != roomData.floor) {
+                _selectedFloor = roomData.floor;
+                _mapKey.currentState?.setFloor(roomData.floor);
+              }
+            });
+            _mapKey.currentState?.moveToLocation(roomData.centroid, zoom: 21.0);
+          }
+        } else {
+          if (mounted) {
+            setState(() {
+              _isCurrentlyIndoor = false;
+            });
+          }
+        }
+      }
+    });
   }
 
   Widget _buildCalibrationButton() {
@@ -1019,6 +1116,78 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
     );
+  }
+
+  // ── AI ICON FLOATING BUTTON ──────────────────────────────────────────────
+  Widget _buildAiIconButton() {
+    return GestureDetector(
+      onTap: () => _openAiAssistant(context),
+      child: Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF4F46E5).withOpacity(0.35),
+              blurRadius: 16,
+              spreadRadius: 2,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Image.asset(
+            'assets/images/aiIcon.png',
+            fit: BoxFit.contain,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── OPEN AI ASSISTANT ──────────────────────────────────────────────────────
+  Future<void> _openAiAssistant(BuildContext context) async {
+    // Unfocus any active search before navigating
+    _searchFocusNode.unfocus();
+    if (_isSearchFocused) {
+      setState(() {
+        _isSearchFocused = false;
+        _searchQuery = '';
+        _searchController.clear();
+      });
+    }
+
+    // Navigate and receive the optional deep-link room back
+    final RoomSearchItem? selectedRoom = await Navigator.push<RoomSearchItem>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AIAssistantScreen(allRooms: _allRooms),
+      ),
+    );
+
+    // If the user tapped "Show on Map" in the AI chat, focus that room
+    if (selectedRoom != null && mounted) {
+      setState(() {
+        _selectedRoomName = selectedRoom.name;
+        _selectedRoomCentroid = selectedRoom.centroid;
+        _selectedRoomFloor = selectedRoom.floor;
+        _selectedFloor = selectedRoom.floor;
+        _searchQuery = selectedRoom.name;
+        _searchController.text = selectedRoom.name;
+        _isNavigating = false;
+        _directionSteps = [];
+      });
+      _mapKey.currentState?.setFloor(selectedRoom.floor);
+      _mapKey.currentState?.selectAndFocusRoom(
+        selectedRoom.floor,
+        selectedRoom.name,
+        selectedRoom.centroid,
+      );
+      _showLocationSnackbar('📍 Showing ${selectedRoom.name} from AI Assistant');
+    }
   }
 
   // ── SEMANTIC SEARCH ENGINE ────────────────────────────────────────────────
@@ -1302,13 +1471,40 @@ class _HomeScreenState extends State<HomeScreen>
           // ── CONTENT AREA ─────────────────────────────────────────────────────
           Expanded(
             child: (_searchQuery.isEmpty && _activeFilter == null)
-                // Zero state: suggestion chips + recent searches
+                // Zero state: AI banner + suggestion chips + recent searches
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 12),
+                      // ── AI ASSISTANT BUTTON (between search and suggestions) ──
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                        child: GestureDetector(
+                          onTap: () => _openAiAssistant(context),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF4F46E5).withOpacity(0.25),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Image.asset(
+                                'assets/images/aiButton.png',
+                                width: double.infinity,
+                                fit: BoxFit.fitWidth,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                       const Padding(
-                        padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                         child: Text(
                           'SUGGESTED SEARCHES',
                           style: TextStyle(
@@ -1546,12 +1742,6 @@ class _HomeScreenState extends State<HomeScreen>
         'designation': 'Assistant Professor',
         'dept': 'Dept. of Information Technology',
         'email': 'rishabh.dev@dbuniversity.ac.in',
-      },
-      216: {
-        'name': 'Dr. Uzzal Sharma',
-        'designation': 'Associate Professor & HOD',
-        'dept': 'Dept. of Computer Applications',
-        'email': 'uzzal.sharma@dbuniversity.ac.in',
       },
       217: {
         'name': 'Dr. Bobby Sharma',
