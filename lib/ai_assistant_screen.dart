@@ -1,3 +1,4 @@
+/*
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'services/gemini_service.dart';
@@ -587,5 +588,5 @@ class ChatMessage {
     required this.text,
     required this.isUser,
     this.matchedRoom,
-  });
 }
+*/

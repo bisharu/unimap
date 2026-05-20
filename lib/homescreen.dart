@@ -21,7 +21,7 @@ import 'services/wifi_fingerprint_service.dart';
 import 'services/wifi_positioning_service.dart';
 import 'utils/directions_helper.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'ai_assistant_screen.dart';
+// import 'ai_assistant_screen.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -767,12 +767,14 @@ class _HomeScreenState extends State<HomeScreen>
             ),
 
           // ── 3. AI ICON BUTTON (above compass) ────────────────────────────
+/*
           if (!_isSearchFocused)
             Positioned(
               bottom: MediaQuery.of(context).padding.bottom + 200,
               right: 16,
               child: _buildAiIconButton(),
             ),
+*/
 
           // ── 3.5. COMPASS ───────────────────────────────────────────────────
           if (!_isSearchFocused)
@@ -1118,6 +1120,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  /*
   // ── AI ICON FLOATING BUTTON ──────────────────────────────────────────────
   Widget _buildAiIconButton() {
     return GestureDetector(
@@ -1147,7 +1150,9 @@ class _HomeScreenState extends State<HomeScreen>
       ),
     );
   }
+  */
 
+  /*
   // ── OPEN AI ASSISTANT ──────────────────────────────────────────────────────
   Future<void> _openAiAssistant(BuildContext context) async {
     // Unfocus any active search before navigating
@@ -1189,6 +1194,7 @@ class _HomeScreenState extends State<HomeScreen>
       _showLocationSnackbar('📍 Showing ${selectedRoom.name} from AI Assistant');
     }
   }
+  */
 
   // ── SEMANTIC SEARCH ENGINE ────────────────────────────────────────────────
   
@@ -1476,6 +1482,7 @@ class _HomeScreenState extends State<HomeScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 12),
+/*
                       // ── AI ASSISTANT BUTTON (between search and suggestions) ──
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -1503,6 +1510,7 @@ class _HomeScreenState extends State<HomeScreen>
                           ),
                         ),
                       ),
+*/
                       const Padding(
                         padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                         child: Text(

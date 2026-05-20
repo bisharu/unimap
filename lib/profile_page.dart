@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'profile_screens.dart';
 import 'skeleton.dart';
-import 'ai_assistant_screen.dart';
+// import 'ai_assistant_screen.dart';
 import 'homescreen.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -144,8 +144,10 @@ class _ProfilePageState extends State<ProfilePage> {
                   _buildSwitchItem(Icons.wifi_tethering, 'Calibration Mode', _isCalibrationMode, _toggleCalibrationMode),
                 ],
                 const Divider(height: 24, indent: 24, endIndent: 24),
+/*
                 // AI Assistant entry — available to all users
                 _buildAiAssistantItem(context),
+*/
                 const Divider(height: 40, indent: 24, endIndent: 24),
                 _buildMenuItem(Icons.logout_rounded, 'Logout', 
                   color: const Color(0xFFD9534F), 
@@ -295,6 +297,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
+  /*
   Widget _buildAiAssistantItem(BuildContext context) {
     return GestureDetector(
       onTap: () async {
@@ -376,6 +379,7 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
     );
   }
+  */
 
   Widget _buildSwitchItem(IconData icon, String label, bool value, ValueChanged<bool> onChanged, {Color? color}) {
     final itemColor = color ?? const Color(0xFF1E3A5F);

@@ -1,3 +1,4 @@
+/*
 import 'package:google_generative_ai/google_generative_ai.dart';
 import '../config/map_config.dart';
 
@@ -118,5 +119,5 @@ GUIDELINES FOR RESPONDING:
   void resetChat() {
     _chatSession = null;
     _model = null;
-  }
 }
+*/
