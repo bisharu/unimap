@@ -38,7 +38,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   List<Polyline> _routePolylines = [];
   List<Polyline> _borderPolylines = [];
   int _selectedFloor = 0;
-  String? _selectedRoomName;
+  LatLng? _destinationLocation;
+  int? _destinationFloor;
+
   LatLng? _selectedRoomCentroid; // unique per-polygon identifier (centroid coords)
   String? _highlightType;   // active filter room type (null = no filter)
   double _currentZoom = 18.5;
@@ -147,7 +149,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
     double minDistance = double.infinity;
     int closestSegmentIndex = -1;
-    LatLng closestPointOnSegment = LatLng(currentFloorRoute.first.latitude, currentFloorRoute.first.longitude);
 
     // Find the closest segment on the current floor's path
     for (int i = 0; i < currentFloorRoute.length - 1; i++) {
@@ -160,7 +161,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       if (dist < minDistance) {
         minDistance = dist;
         closestSegmentIndex = i;
-        closestPointOnSegment = projection;
       }
     }
 
@@ -693,8 +693,10 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       setState(() {
         if (path == null || path.isEmpty) {
           _routePolylines = [];
+          _destinationLocation = null;
+          _destinationFloor = null;
         } else {
-          _routePolylines = [
+          final List<Polyline> polylines = [
             // 1. Path Glow / Outer Line
             Polyline(
               points: path,
@@ -712,6 +714,62 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
               strokeJoin: StrokeJoin.round,
             ),
           ];
+
+          // 3. User Snap Dotted Line (Start)
+          if (widget.userLocation != null) {
+            final startLatLng = widget.userLocation!;
+            final endLatLng = path.first;
+            final distance = const Distance().as(LengthUnit.Meter, startLatLng, endLatLng);
+            if (distance > 1.0) {
+              polylines.addAll([
+                // Outer dotted line (accent outline)
+                Polyline(
+                  points: [startLatLng, endLatLng],
+                  strokeWidth: 8.0,
+                  color: const Color(0xFF5B5FEF).withValues(alpha: 0.5),
+                  pattern: const StrokePattern.dotted(spacingFactor: 1.8),
+                  strokeCap: StrokeCap.round,
+                ),
+                // Inner dotted line (white core)
+                Polyline(
+                  points: [startLatLng, endLatLng],
+                  strokeWidth: 4.5,
+                  color: Colors.white,
+                  pattern: const StrokePattern.dotted(spacingFactor: 1.8),
+                  strokeCap: StrokeCap.round,
+                ),
+              ]);
+            }
+          }
+
+          // 4. Destination Snap Dotted Line (End)
+          if (_destinationLocation != null && _destinationFloor == _selectedFloor) {
+            final startLatLng = path.last;
+            final endLatLng = _destinationLocation!;
+            final distance = const Distance().as(LengthUnit.Meter, startLatLng, endLatLng);
+            if (distance > 1.0) {
+              polylines.addAll([
+                // Outer dotted line (accent outline)
+                Polyline(
+                  points: [startLatLng, endLatLng],
+                  strokeWidth: 8.0,
+                  color: const Color(0xFF5B5FEF).withValues(alpha: 0.5),
+                  pattern: const StrokePattern.dotted(spacingFactor: 1.8),
+                  strokeCap: StrokeCap.round,
+                ),
+                // Inner dotted line (white core)
+                Polyline(
+                  points: [startLatLng, endLatLng],
+                  strokeWidth: 4.5,
+                  color: Colors.white,
+                  pattern: const StrokePattern.dotted(spacingFactor: 1.8),
+                  strokeCap: StrokeCap.round,
+                ),
+              ]);
+            }
+          }
+
+          _routePolylines = polylines;
         }
       });
     }
@@ -721,6 +779,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
   void showDirectionsTo(LatLng destination, {int? destinationFloor, bool accessibleRoute = false}) {
     if (widget.userLocation == null) return;
+    
+    _destinationLocation = destination;
+    _destinationFloor = destinationFloor ?? _selectedFloor;
     
     final start = NavPoint(
       latitude: widget.userLocation!.latitude,
@@ -832,7 +893,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   void selectAndFocusRoom(int floor, String roomName, LatLng centroid) {
     if (_selectedFloor != floor) {
       _selectedFloor = floor;
-      _selectedRoomName = roomName;
       _selectedRoomCentroid = centroid;
       _highlightType = null; // clear filter so only this room is highlighted
       _loadFloorPlan(floor).then((_) {
@@ -840,7 +900,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       });
     } else {
       setState(() {
-        _selectedRoomName = roomName;
         _selectedRoomCentroid = centroid;
         _highlightType = null; // clear filter so only this room is highlighted
       });
@@ -964,7 +1023,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       // Clear any active type-based filter so ONLY the tapped room is highlighted.
       _highlightType = null;
       setState(() {
-        _selectedRoomName     = tappedRoomName;
         _selectedRoomCentroid = tappedCentroid; // unique identifier for this polygon
       });
       _updateMapObjects();
@@ -990,15 +1048,13 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             maxZoom: 22.0,
             onTap: (_, point) => _handleMapTap(point),
             onPositionChanged: (pos, hasGesture) {
-              if (pos.zoom != null) {
-                final double oldZoom = _currentZoom;
-                _currentZoom = pos.zoom!;
-                final bool crossedLabelThreshold = (oldZoom > 19.0) != (_currentZoom > 19.0);
-                if ((_currentZoom - oldZoom).abs() > 0.05 || crossedLabelThreshold) {
-                  _updateMapObjects();
-                }
+              final double oldZoom = _currentZoom;
+              _currentZoom = pos.zoom;
+              final bool crossedLabelThreshold = (oldZoom > 19.0) != (_currentZoom > 19.0);
+              if ((_currentZoom - oldZoom).abs() > 0.05 || crossedLabelThreshold) {
+                _updateMapObjects();
               }
-            },
+                        },
           ),
           children: [
             // Neo-minimal map style with black roads

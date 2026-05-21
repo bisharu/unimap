@@ -162,7 +162,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
               height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF4F46E5).withOpacity(0.15), // Deep purple glow
+                color: const Color(0xFF4F46E5).withValues(alpha: 0.15), // Deep purple glow
               ),
             ),
           ),
@@ -174,7 +174,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
               height: 350,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF06B6D4).withOpacity(0.15), // Cyan/teal glow
+                color: const Color(0xFF06B6D4).withValues(alpha: 0.15), // Cyan/teal glow
               ),
             ),
           ),
@@ -219,8 +219,8 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B).withOpacity(0.3),
-        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
+        color: const Color(0xFF1E293B).withValues(alpha: 0.3),
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
       ),
       child: Row(
         children: [
@@ -260,7 +260,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
                   "Powered by Google Gemini 2.5 Flash",
                   style: TextStyle(
                     fontFamily: 'googlesans',
-                    color: Colors.cyanAccent.withOpacity(0.8),
+                    color: Colors.cyanAccent.withValues(alpha: 0.8),
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -308,7 +308,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
         decoration: BoxDecoration(
           color: isUser
               ? const Color(0xFF4F46E5) // Sleek indigo for user prompts
-              : const Color(0xFF1E293B).withOpacity(0.7), // Glassmorphism slate card
+              : const Color(0xFF1E293B).withValues(alpha: 0.7), // Glassmorphism slate card
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
             topRight: const Radius.circular(18),
@@ -317,13 +317,13 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
           ),
           border: Border.all(
             color: isUser 
-                ? const Color(0xFF6366F1).withOpacity(0.3)
-                : Colors.white.withOpacity(0.08),
+                ? const Color(0xFF6366F1).withValues(alpha: 0.3)
+                : Colors.white.withValues(alpha: 0.08),
             width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.08),
+              color: Colors.black.withValues(alpha: 0.08),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
@@ -455,9 +455,9 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       margin: const EdgeInsets.only(left: 16, bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B).withOpacity(0.5),
+        color: const Color(0xFF1E293B).withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -475,7 +475,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
             "UniMap AI is thinking...",
             style: TextStyle(
               fontFamily: 'googlesans',
-              color: Colors.white.withOpacity(0.6),
+              color: Colors.white.withValues(alpha: 0.6),
               fontSize: 13,
             ),
           ),
@@ -504,7 +504,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1E293B),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
               ),
               child: Center(
                 child: Text(
@@ -529,7 +529,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05))),
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
       ),
       child: Row(
         children: [
@@ -540,7 +540,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
                 color: const Color(0xFF1E293B),
                 borderRadius: BorderRadius.circular(24),
                 border: Border.all(
-                  color: Colors.white.withOpacity(0.08),
+                  color: Colors.white.withValues(alpha: 0.08),
                   width: 1.5,
                 ),
               ),
@@ -550,7 +550,7 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
                 cursorColor: Colors.cyanAccent,
                 decoration: InputDecoration(
                   hintText: "Ask Campus Assistant...",
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.35)),
+                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
                   border: InputBorder.none,
                 ),
                 onSubmitted: (_) => _handleSendMessage(),

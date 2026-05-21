@@ -90,10 +90,12 @@ class _LoginState extends State<Login> {
       } else if (e.code == 'wrong-password') {
         message = 'Incorrect password';
       }
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: ${e.toString()}')),
       );
@@ -253,9 +255,9 @@ class _LoginState extends State<Login> {
                   filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.25),
+                      color: Colors.white.withValues(alpha: 0.25),
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.5),
                     ),
                     child: IconButton(
                       icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black, size: 20),

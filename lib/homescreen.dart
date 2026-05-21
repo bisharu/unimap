@@ -17,9 +17,8 @@ import 'profile_page.dart';
 import 'skeleton.dart';
 import 'filter_screen.dart';
 import 'dart:ui' as ui;
-import 'services/wifi_fingerprint_service.dart';
-import 'services/wifi_positioning_service.dart';
 import 'utils/directions_helper.dart';
+import 'utils/indoor_positioning_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 // import 'ai_assistant_screen.dart';
 
@@ -48,6 +47,10 @@ class _HomeScreenState extends State<HomeScreen>
   bool _isFloorMenuOpen = false;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<IndoorMapWidgetState> _mapKey = GlobalKey<IndoorMapWidgetState>();
+  final IndoorPositioningService _indoorPositioningService = IndoorPositioningService();
+  StreamSubscription<IndoorPositioningUpdate>? _indoorPositioningSubscription;
+  bool _isIndoorFusionEnabled = false;
+  int _indoorStepCount = 0;
 
   // Compass and Connectivity
   double _heading = 0;
@@ -55,9 +58,9 @@ class _HomeScreenState extends State<HomeScreen>
   List<DirectionStep> _directionSteps = [];
 
   // Geofencing security state variables
-  bool _geofenceBypass = false;
-  int _devTapCount = 0;
-  DateTime? _lastDevTap;
+  // bool _geofenceBypass = false;
+  // int _devTapCount = 0;
+  // DateTime? _lastDevTap;
   StreamSubscription? _connectivitySubscription;
   StreamSubscription? _compassSubscription;
   StreamSubscription<Position>? _positionSubscription;
@@ -65,13 +68,6 @@ class _HomeScreenState extends State<HomeScreen>
   String? _selectedRoomName;
   LatLng? _selectedRoomCentroid;
   int? _selectedRoomFloor;
-  final WifiFingerprintService _fingerprintService = WifiFingerprintService();
-  final WifiPositioningService _wifiPositioningService = WifiPositioningService();
-  Timer? _wifiScanTimer;
-  bool _isIndoorPositioningEnabled = false;
-  bool _isCurrentlyIndoor = false;
-  bool _isCalibrationMode = false;
-  bool _isRecordingFingerprint = false;
   bool _isNavigating = false; // Tracks whether map routing is currently active
 
   @override
@@ -83,11 +79,6 @@ class _HomeScreenState extends State<HomeScreen>
         setState(() {
           _isSearchFocused = hasFocus;
         });
-      }
-      
-      // If we lost focus, make sure the keyboard is hidden
-      if (!hasFocus) {
-        SystemChannels.textInput.invokeMethod('TextInput.hide');
       }
     });
     // Connectivity Check
@@ -115,18 +106,7 @@ class _HomeScreenState extends State<HomeScreen>
     _fetchUserName();
     _loadAllRoomsData();
     _loadRecentSearches();
-    _loadCalibrationMode();
-    _wifiPositioningService.fetchRadioMap();
     _seedFacultyCabins(); // Self-healing background faculty seeder
-  }
-
-  Future<void> _loadCalibrationMode() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _isCalibrationMode = prefs.getBool('calibration_mode') ?? false;
-      });
-    }
   }
 
   Future<void> _loadRecentSearches() async {
@@ -287,7 +267,8 @@ class _HomeScreenState extends State<HomeScreen>
     _connectivitySubscription?.cancel();
     _compassSubscription?.cancel();
     _positionSubscription?.cancel();
-    _wifiScanTimer?.cancel();
+    _indoorPositioningSubscription?.cancel();
+    _indoorPositioningService.dispose();
     super.dispose();
   }
 
@@ -346,9 +327,6 @@ class _HomeScreenState extends State<HomeScreen>
             // 5. Accuracy Filtering: Ignore points with very high error margins
             if (position.accuracy > 35) return;
 
-            // FUSION LOGIC: Ignore GPS updates if we are currently locked onto an indoor WiFi position
-            if (_isCurrentlyIndoor) return;
-
             setState(() {
               // 2. Exponential Moving Average Smoothing
               // weight: 0.3 (new), 0.7 (old) to reduce marker "jumping"
@@ -365,6 +343,10 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
 
+      if (_isIndoorFusionEnabled) {
+        _indoorPositioningService.updateWithGps(newLocation);
+      }
+
       _showLocationSnackbar('📍 Tracking live location...');
     } catch (e) {
       setState(() {
@@ -372,6 +354,42 @@ class _HomeScreenState extends State<HomeScreen>
       });
       _showLocationSnackbar('Could not get your location. Please try again.');
     }
+  }
+
+  void _toggleIndoorFusion() {
+    if (_isIndoorFusionEnabled) {
+      _indoorPositioningSubscription?.cancel();
+      _indoorPositioningService.stop();
+      setState(() {
+        _isIndoorFusionEnabled = false;
+        _indoorStepCount = 0;
+      });
+      _showLocationSnackbar('Indoor fusion disabled.');
+      return;
+    }
+
+    if (_currentLocation == null) {
+      _showLocationSnackbar('Anchor your location first before activating indoor fusion.');
+      return;
+    }
+
+    _indoorPositioningSubscription?.cancel();
+    _indoorPositioningService.setAnchor(_currentLocation!);
+    _indoorPositioningService.start(anchorLocation: _currentLocation!);
+    _indoorPositioningSubscription = _indoorPositioningService.updates.listen((update) {
+      if (!mounted) return;
+      setState(() {
+        _indoorStepCount = update.stepCount;
+        _heading = update.heading;
+        _currentLocation = update.estimatedLocation;
+      });
+      _mapKey.currentState?.moveToLocation(update.estimatedLocation, zoom: 19.0);
+    });
+
+    setState(() {
+      _isIndoorFusionEnabled = true;
+    });
+    _showLocationSnackbar('Indoor fusion enabled. Step-based position tracking started.');
   }
 
   void _showLocationSnackbar(String message) {
@@ -402,9 +420,7 @@ class _HomeScreenState extends State<HomeScreen>
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => const ProfilePage()),
-    ).then((_) {
-      _loadCalibrationMode();
-    });
+    );
   }
 
   Future<void> _openFilterScreen(BuildContext context) async {
@@ -545,7 +561,9 @@ class _HomeScreenState extends State<HomeScreen>
                                     _currentLocation = anchorLoc;
                                     _selectedFloor = floor;
                                   });
-                                  
+                                  if (_isIndoorFusionEnabled) {
+                                    _indoorPositioningService.updateWithGps(anchorLoc);
+                                  }
                                   _mapKey.currentState?.setFloor(floor);
                                   _mapKey.currentState?.moveToLocation(anchorLoc, zoom: 21.0);
                                   
@@ -706,7 +724,7 @@ class _HomeScreenState extends State<HomeScreen>
       child: Scaffold(
         key: _scaffoldKey,
         backgroundColor: Colors.transparent,
-        resizeToAvoidBottomInset: false,
+        resizeToAvoidBottomInset: true,
         endDrawer: Drawer(
           width: MediaQuery.of(context).size.width * 0.85,
           child: FilterScreen(
@@ -784,6 +802,14 @@ class _HomeScreenState extends State<HomeScreen>
               child: _buildCompass(),
             ),
 
+          // ── 3.6. INDOOR FUSION BUTTON (above compass)
+          if (!_isSearchFocused)
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 200,
+              right: 16,
+              child: _buildIndoorFusionButton(),
+            ),
+
           // ── 4. LOCATION BUTTON (bottom right) ──────────────────────────────
           if (!_isSearchFocused)
             Positioned(
@@ -792,19 +818,11 @@ class _HomeScreenState extends State<HomeScreen>
               child: _buildLocationButton(),
             ),
 
-          // ── 4.5. INDOOR POSITIONING BUTTON (bottom left) ───────────────────
-          if (!_isSearchFocused)
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 64,
-              left: 16,
-              child: _buildIndoorPositioningButton(),
-            ),
-
           // ── 5. OFFLINE OVERLAY ─────────────────────────────────────────────
           if (_isOffline)
             Positioned.fill(
               child: Container(
-                color: Colors.black.withOpacity(0.6),
+                color: Colors.black.withValues(alpha: 0.6),
                 child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -861,135 +879,10 @@ class _HomeScreenState extends State<HomeScreen>
               child: _buildFloorFabMenu(),
             ),
 
-          // ── 8. CALIBRATION FAB ─────────────────────────────────────────────
-          if (!_isSearchFocused && _selectedRoomName != null && _isCalibrationMode)
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 120, // Above directions panel
-              left: 16,
-              child: _buildCalibrationButton(),
-            ),
           ],
         ),
       ),
     );
-  }
-
-  Widget _buildIndoorPositioningButton() {
-    return FloatingActionButton.extended(
-      heroTag: 'indoor_pos_fab',
-      onPressed: _toggleIndoorPositioning,
-      backgroundColor: _isIndoorPositioningEnabled ? Colors.green : Colors.white,
-      icon: Icon(
-        Icons.wifi_find,
-        color: _isIndoorPositioningEnabled ? Colors.white : const Color(0xFF1E3A5F),
-      ),
-      label: Text(
-        _isIndoorPositioningEnabled ? "Indoor Mode: ON" : "Indoor Mode",
-        style: TextStyle(
-          color: _isIndoorPositioningEnabled ? Colors.white : const Color(0xFF1E3A5F),
-          fontWeight: FontWeight.bold,
-          fontFamily: 'googlesans',
-        ),
-      ),
-    );
-  }
-
-  void _toggleIndoorPositioning() {
-    setState(() {
-      _isIndoorPositioningEnabled = !_isIndoorPositioningEnabled;
-      if (_isIndoorPositioningEnabled) {
-        _showLocationSnackbar('📶 Indoor WiFi Positioning Enabled');
-        _startWifiScanning();
-      } else {
-        _isCurrentlyIndoor = false;
-        _wifiScanTimer?.cancel();
-        _showLocationSnackbar('🛰️ Switched to GPS Positioning');
-      }
-    });
-  }
-
-  void _startWifiScanning() {
-    _wifiScanTimer?.cancel();
-    _wifiScanTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
-      if (!_isIndoorPositioningEnabled) {
-        timer.cancel();
-        return;
-      }
-      
-      final liveVector = await _wifiPositioningService.performLiveScan();
-      if (liveVector != null) {
-        final estimatedRoom = _wifiPositioningService.estimateLocation(liveVector, maxDistanceThreshold: 45.0);
-        
-        if (estimatedRoom != null) {
-          final roomData = _allRooms.firstWhereOrNull((r) => r.name == estimatedRoom);
-          if (roomData != null && mounted) {
-            setState(() {
-              _isCurrentlyIndoor = true;
-              _currentLocation = roomData.centroid;
-              if (_selectedFloor != roomData.floor) {
-                _selectedFloor = roomData.floor;
-                _mapKey.currentState?.setFloor(roomData.floor);
-              }
-            });
-            _mapKey.currentState?.moveToLocation(roomData.centroid, zoom: 21.0);
-          }
-        } else {
-          if (mounted) {
-            setState(() {
-              _isCurrentlyIndoor = false;
-            });
-          }
-        }
-      }
-    });
-  }
-
-  Widget _buildCalibrationButton() {
-    return FloatingActionButton.extended(
-      heroTag: 'calibration_fab',
-      onPressed: _isRecordingFingerprint ? null : _recordFingerprint,
-      backgroundColor: _isRecordingFingerprint ? Colors.grey : Colors.redAccent,
-      icon: _isRecordingFingerprint
-          ? const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-            )
-          : const Icon(Icons.wifi_tethering, color: Colors.white),
-      label: Text(
-        _isRecordingFingerprint ? "Scanning WiFi..." : "Record Fingerprint",
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
-  Future<void> _recordFingerprint() async {
-    if (_selectedRoomName == null) return;
-    
-    setState(() {
-      _isRecordingFingerprint = true;
-    });
-
-    try {
-      bool hasPermissions = await _fingerprintService.requestPermissions();
-      if (!hasPermissions) {
-        _showLocationSnackbar("Location/WiFi permissions are required.");
-        return;
-      }
-
-      final vector = await _fingerprintService.collectWifiVector();
-      await _fingerprintService.saveFingerprint(_selectedRoomName!, vector);
-      
-      _showLocationSnackbar("✅ Fingerprint saved for $_selectedRoomName");
-    } catch (e) {
-      _showLocationSnackbar("Error saving fingerprint: $e");
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isRecordingFingerprint = false;
-        });
-      }
-    }
   }
 
   Widget _buildFloorFabMenu() {
@@ -1025,7 +918,7 @@ class _HomeScreenState extends State<HomeScreen>
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.15),
+                        color: Colors.black.withValues(alpha: 0.15),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -1043,7 +936,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             );
-          }).toList(),
+          }),
         GestureDetector(
           onTap: () {
             setState(() {
@@ -1058,7 +951,7 @@ class _HomeScreenState extends State<HomeScreen>
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.black.withValues(alpha: 0.2),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -1106,7 +999,7 @@ class _HomeScreenState extends State<HomeScreen>
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withValues(alpha: 0.1),
               blurRadius: 10,
               offset: const Offset(0, 2),
             ),
@@ -1133,7 +1026,7 @@ class _HomeScreenState extends State<HomeScreen>
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF4F46E5).withOpacity(0.35),
+              color: const Color(0xFF4F46E5).withValues(alpha: 0.35),
               blurRadius: 16,
               spreadRadius: 2,
               offset: const Offset(0, 4),
@@ -1357,6 +1250,13 @@ class _HomeScreenState extends State<HomeScreen>
                     focusNode: _searchFocusNode,
                     controller: _searchController,
                     autofocus: true,
+                    showCursor: true,
+                    cursorColor: Colors.blueAccent,
+                    cursorWidth: 2,
+                    cursorHeight: 20,
+                    cursorRadius: const Radius.circular(2),
+                    keyboardType: TextInputType.text,
+                    textInputAction: TextInputAction.search,
                     textAlignVertical: TextAlignVertical.center,
                     onChanged: (val) {
                       setState(() {
@@ -1377,7 +1277,7 @@ class _HomeScreenState extends State<HomeScreen>
                       hintText: 'Search location',
                       hintStyle: TextStyle(
                         fontFamily: 'googlesans',
-                        color: Colors.black.withOpacity(0.38),
+                        color: Colors.black.withValues(alpha: 0.38),
                         fontSize: 18,
                       ),
                       border: InputBorder.none,
@@ -1493,7 +1393,7 @@ class _HomeScreenState extends State<HomeScreen>
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: const Color(0xFF4F46E5).withOpacity(0.25),
+                                  color: const Color(0xFF4F46E5).withValues(alpha: 0.25),
                                   blurRadius: 16,
                                   offset: const Offset(0, 6),
                                 ),
@@ -1877,6 +1777,7 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  /*
   bool _checkGeofence() {
     debugPrint("???? [Geofence Check] Geofence disabled. Returning true.");
     return true;
@@ -2073,6 +1974,7 @@ class _HomeScreenState extends State<HomeScreen>
       },
     );
   }
+  */
 
   void _showAllStepsBottomSheet() {
     showModalBottomSheet(
@@ -2217,7 +2119,7 @@ class _HomeScreenState extends State<HomeScreen>
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.13),
+            color: Colors.black.withValues(alpha: 0.13),
             blurRadius: 20,
             offset: const Offset(0, -4),
           ),
@@ -2358,7 +2260,7 @@ class _HomeScreenState extends State<HomeScreen>
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.13),
+            color: Colors.black.withValues(alpha: 0.13),
             blurRadius: 20,
             offset: const Offset(0, -4),
           ),
@@ -2627,7 +2529,7 @@ class _HomeScreenState extends State<HomeScreen>
         children: [
           CircleAvatar(
             radius: 28,
-            backgroundColor: Colors.white.withOpacity(0.25),
+            backgroundColor: Colors.white.withValues(alpha: 0.25),
             child: Text(initials,
                 style: const TextStyle(
                     color: Colors.white,
@@ -2673,7 +2575,7 @@ class _HomeScreenState extends State<HomeScreen>
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+                    color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
                 child: const Icon(Icons.mail_rounded, color: Colors.white, size: 19),
               ),
             ),
@@ -2777,7 +2679,14 @@ Widget _buildSearchBar(BuildContext context) {
 
   return GestureDetector(
     onTap: () {
-      if (!_searchFocusNode.hasFocus) _searchFocusNode.requestFocus();
+      setState(() {
+        _isSearchFocused = true;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _searchFocusNode.requestFocus();
+        }
+      });
     },
     child: AnimatedContainer(
       duration: const Duration(milliseconds: 280),
@@ -2786,7 +2695,7 @@ Widget _buildSearchBar(BuildContext context) {
       decoration: BoxDecoration(
         boxShadow: [
           BoxShadow(
-            color: Colors.blue.withOpacity(0.4),
+            color: Colors.blue.withValues(alpha: 0.4),
             blurRadius: 16,
             offset: const Offset(0, 6),
           ),
@@ -2815,13 +2724,13 @@ Widget _buildSearchBar(BuildContext context) {
               // ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.pinkAccent.withOpacity(0.4),
+                  color: Colors.pinkAccent.withValues(alpha: 0.4),
                   blurRadius: 10,
                   spreadRadius: 1,
                   offset: const Offset(-2, 0),
                 ),
                 BoxShadow(
-                  color: Colors.blueAccent.withOpacity(0.4),
+                  color: Colors.blueAccent.withValues(alpha: 0.4),
                   blurRadius: 10,
                   spreadRadius: 1,
                   offset: const Offset(2, 0),
@@ -2835,31 +2744,27 @@ Widget _buildSearchBar(BuildContext context) {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
+                    color: Colors.white.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.black.withOpacity(0.3)),
+                    border: Border.all(color: Colors.black.withValues(alpha: 0.3)),
                   ),
                   child: const Icon(Icons.search, color: Colors.black, size: 22),
                 ),
                 const SizedBox(width: 12),
 
-                // Text field
+                // Search label and query preview
                 Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    focusNode: _searchFocusNode,
-                    style: const TextStyle(color: Colors.black, fontSize: 15),
-                    cursorColor: Colors.blueAccent,
-                    onChanged: (value) {
-                      setState(() => _searchQuery = value);
-                    },
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(vertical: 10),
-                      hintText: 'Search rooms, labs, halls...',
-                      hintStyle: TextStyle(color: Colors.black),
-                      border: InputBorder.none,
+                  child: Text(
+                    _searchQuery.isEmpty ? 'Search rooms, labs, halls...' : _searchQuery,
+                    style: TextStyle(
+                      fontFamily: 'googlesans',
+                      fontSize: 15,
+                      color: _searchQuery.isEmpty
+                          ? Colors.black.withValues(alpha: 0.45)
+                          : Colors.black87,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
 
@@ -2888,7 +2793,7 @@ Widget _buildSearchBar(BuildContext context) {
                         onTap: () => _showProfileMenu(context),
                         child: CircleAvatar(
                           radius: 16,
-                          backgroundColor: Colors.blue.withOpacity(0.2),
+                          backgroundColor: Colors.blue.withValues(alpha: 0.2),
                           child: Text(
                             _getUserInitial(),
                             style: const TextStyle(
@@ -2972,6 +2877,65 @@ Widget _buildSearchBar(BuildContext context) {
       ),
     );
   }
+
+  Widget _buildIndoorFusionButton() {
+    return GestureDetector(
+      onTap: _toggleIndoorFusion,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          color: _isIndoorFusionEnabled ? const Color(0xFF1E8E3E) : Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.14),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(
+            color: _isIndoorFusionEnabled ? const Color(0xFF0F6A26) : Colors.black12,
+            width: 1.5,
+          ),
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(
+              _isIndoorFusionEnabled ? Icons.track_changes_rounded : Icons.explore_rounded,
+              color: _isIndoorFusionEnabled ? Colors.white : Colors.blue,
+              size: 24,
+            ),
+            if (_isIndoorFusionEnabled && _indoorStepCount > 0)
+              Positioned(
+                top: 6,
+                right: 6,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.2),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$_indoorStepCount',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ── PROFILE BOTTOM SHEET ──────────────────────────────────────────────────
@@ -3041,9 +3005,11 @@ class _ProfileBottomSheetState extends State<_ProfileBottomSheet> {
     if (user != null) {
       try {
         final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-        if (doc.exists && mounted) {
+        if (mounted) {
           setState(() {
-            _userData = doc.data();
+            if (doc.exists) {
+              _userData = doc.data();
+            }
             _isLoading = false;
           });
         }
