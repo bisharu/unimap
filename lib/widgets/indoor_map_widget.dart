@@ -14,6 +14,8 @@ class IndoorMapWidget extends StatefulWidget {
   final double heading;
   final Function(String name, LatLng centroid)? onRoomSelected;
   final Function(List<NavPoint> path)? onRouteCalculated;
+  final String? highlightType;
+  final bool isNavigating;
 
   const IndoorMapWidget({
     super.key,
@@ -23,9 +25,8 @@ class IndoorMapWidget extends StatefulWidget {
     this.onRoomSelected,
     this.onRouteCalculated,
     this.highlightType,
+    this.isNavigating = false,
   });
-
-  final String? highlightType; // room type to highlight when filter is active
 
   @override
   State<IndoorMapWidget> createState() => IndoorMapWidgetState();
@@ -401,6 +402,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   List<Marker> _deconflictMarkers(List<Map<String, dynamic>> potentialMarkers) {
     final List<Marker> markers = [];
     final List<Rect> occupiedRects = [];
+    final bool bypassDeconfliction = _currentZoom >= 20.5;
     
     for (var m in potentialMarkers) {
       final LatLng point = m['point'];
@@ -423,15 +425,17 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       
       // Check for collisions
       bool hasCollision = false;
-      for (var occupied in occupiedRects) {
-        if (occupied.overlaps(rect)) {
-          hasCollision = true;
-          break;
+      if (!bypassDeconfliction) {
+        for (var occupied in occupiedRects) {
+          if (occupied.overlaps(rect)) {
+            hasCollision = true;
+            break;
+          }
         }
       }
       
       // Prominent markers (selected/filtered) have higher tolerance or are always shown
-      if (!hasCollision || m['isSelected']) {
+      if (bypassDeconfliction || !hasCollision || m['isSelected']) {
         markers.add(Marker(
           point: point,
           width: w,
@@ -439,7 +443,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           rotate: true,
           child: _buildMarkerWidget(name, roomNo, type, m['isSelected']),
         ));
-        occupiedRects.add(rect.inflate(4)); // Add some padding between labels
+        if (!bypassDeconfliction) {
+          occupiedRects.add(rect.inflate(4)); // Add some padding between labels
+        }
       }
     }
     return markers;
@@ -855,6 +861,18 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     _mapController.rotate(0);
   }
 
+  void rotateMapToHeading(double heading) {
+    // In FlutterMap, 0 is North. If device points East (90), to make East point UP, 
+    // the map needs to be rotated -90 or 270 degrees.
+    double rotation = (360 - heading) % 360;
+    _mapController.rotate(rotation);
+  }
+
+  void moveMapWithHeading(LatLng location, double heading) {
+    double rotation = (360 - heading) % 360;
+    _mapController.moveAndRotate(location, _mapController.camera.zoom, rotation);
+  }
+
   void moveToLocation(LatLng destLocation, {double? zoom}) {
     final destZoom = zoom ?? _mapController.camera.zoom;
     
@@ -1114,7 +1132,10 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                     width: 90,
                     height: 90,
                     rotate: true, // Always upright on screen
-                    child: UserLocationMarker(heading: widget.heading),
+                    child: UserLocationMarker(
+                      heading: widget.heading,
+                      isNavigating: widget.isNavigating,
+                    ),
                   ),
                 ],
               ),
@@ -1166,8 +1187,13 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
 class UserLocationMarker extends StatefulWidget {
   final double heading; // degrees, 0 = North
+  final bool isNavigating;
 
-  const UserLocationMarker({super.key, required this.heading});
+  const UserLocationMarker({
+    super.key,
+    required this.heading,
+    this.isNavigating = false,
+  });
 
   @override
   State<UserLocationMarker> createState() => _UserLocationMarkerState();
@@ -1206,7 +1232,7 @@ class _UserLocationMarkerState extends State<UserLocationMarker>
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // 1. Pulsing accuracy ring
+          // 1. Pulsing accuracy ring (always shown)
           AnimatedBuilder(
             animation: _pulseAnimation,
             builder: (context, child) {
@@ -1224,42 +1250,50 @@ class _UserLocationMarkerState extends State<UserLocationMarker>
             },
           ),
 
-          // 2. Static semi-transparent accuracy circle
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFF4285F4).withValues(alpha: 0.15),
+          if (widget.isNavigating)
+            // Navigation mode: rotating caret ^ arrow
+            Transform.rotate(
+              angle: headingRad,
+              child: const Icon(
+                Icons.navigation_rounded,
+                color: Color(0xFF4285F4),
+                size: 32,
+                shadows: [
+                  Shadow(
+                    color: Colors.white,
+                    blurRadius: 6,
+                  ),
+                ],
+              ),
+            )
+          else ...[
+            // Default mode: static accuracy ring + blue dot
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF4285F4).withValues(alpha: 0.15),
+              ),
             ),
-          ),
-
-          // 3. Directional heading cone (rotates with compass)
-          Transform.rotate(
-            angle: headingRad,
-            child: CustomPaint(
-              size: const Size(90, 90),
-              painter: _HeadingArrowPainter(),
+            // Center blue dot with white border
+            Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                color: const Color(0xFF4285F4),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF4285F4).withValues(alpha: 0.4),
+                    blurRadius: 6,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
             ),
-          ),
-
-          // 4. Center blue dot with white border
-          Container(
-            width: 16,
-            height: 16,
-            decoration: BoxDecoration(
-              color: const Color(0xFF4285F4),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2.5),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF4285F4).withValues(alpha: 0.4),
-                  blurRadius: 6,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-          ),
+          ],
         ],
       ),
     );

@@ -4,7 +4,6 @@ import 'package:collection/collection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:latlong2/latlong.dart';
@@ -21,6 +20,7 @@ import 'utils/directions_helper.dart';
 import 'utils/indoor_positioning_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 // import 'ai_assistant_screen.dart';
+import 'package:geolocator/geolocator.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -44,7 +44,10 @@ class _HomeScreenState extends State<HomeScreen>
   String? _userName;
   LatLng? _currentLocation;
   int _selectedFloor = 0;
+  int? _userPhysicalFloor;
   bool _isFloorMenuOpen = false;
+  bool _didShowFloorMismatchWarning = false;
+  bool _isQrAnchored = false; // true when location was set via QR scan
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<IndoorMapWidgetState> _mapKey = GlobalKey<IndoorMapWidgetState>();
   final IndoorPositioningService _indoorPositioningService = IndoorPositioningService();
@@ -52,10 +55,28 @@ class _HomeScreenState extends State<HomeScreen>
   bool _isIndoorFusionEnabled = false;
   int _indoorStepCount = 0;
 
+  // Animated search placeholder
+  static const List<String> _searchPlaceholders = [
+    'Search Classrooms',
+    'Search Washrooms',
+    'Search Faculty Cabins',
+    'Search Cafeteria',
+    'Search Atrium',
+    'Search Offices',
+    'Search Infirmary',
+    'Search Parking Lot',
+  ];
+  int _currentPlaceholderIndex = 0;
+  double _placeholderOpacity = 1.0;
+  Timer? _placeholderTimer;
+
   // Compass and Connectivity
   double _heading = 0;
   bool _isOffline = false;
   List<DirectionStep> _directionSteps = [];
+  bool _isOrientationMode = false; // Tracks if compass/orientation mode is active
+  LatLng? _lastOrientationLocation; // For tracking movement in orientation mode
+  double _lastHeading = 0; // Previous heading to detect changes
 
   // Geofencing security state variables
   // bool _geofenceBypass = false;
@@ -63,8 +84,6 @@ class _HomeScreenState extends State<HomeScreen>
   // DateTime? _lastDevTap;
   StreamSubscription? _connectivitySubscription;
   StreamSubscription? _compassSubscription;
-  StreamSubscription<Position>? _positionSubscription;
-  bool _isTrackingLocation = false;
   String? _selectedRoomName;
   LatLng? _selectedRoomCentroid;
   int? _selectedRoomFloor;
@@ -80,7 +99,13 @@ class _HomeScreenState extends State<HomeScreen>
           _isSearchFocused = hasFocus;
         });
       }
+      if (hasFocus) {
+        _stopPlaceholderAnimation();
+      } else {
+        _startPlaceholderAnimation();
+      }
     });
+    _startPlaceholderAnimation();
     // Connectivity Check
     _checkInitialConnectivity();
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((results) {
@@ -93,6 +118,11 @@ class _HomeScreenState extends State<HomeScreen>
         setState(() {
           _heading = event.heading ?? 0;
         });
+        
+        // If orientation mode is active and we have a current location, rotate and move the map
+        if (_isOrientationMode && _currentLocation != null) {
+          _handleOrientationMapMovement();
+        }
       }
     });
 
@@ -266,93 +296,296 @@ class _HomeScreenState extends State<HomeScreen>
     _searchController.dispose();
     _connectivitySubscription?.cancel();
     _compassSubscription?.cancel();
-    _positionSubscription?.cancel();
+    _placeholderTimer?.cancel();
     _indoorPositioningSubscription?.cancel();
     _indoorPositioningService.dispose();
     super.dispose();
   }
 
-  Future<void> _getCurrentLocation() async {
-    setState(() {
-      _isFetchingLocation = true;
-    });
-
-    // Check & request permission
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.deniedForever ||
-        permission == LocationPermission.denied) {
-      setState(() {
-        _isFetchingLocation = false;
+  // ── ANIMATED SEARCH PLACEHOLDER ──────────────────────────────────────────
+  void _startPlaceholderAnimation() {
+    _placeholderTimer?.cancel();
+    _placeholderTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+      if (!mounted) return;
+      // Fade out
+      setState(() => _placeholderOpacity = 0.0);
+      // After fade-out completes, switch text and fade back in
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
+        setState(() {
+          _currentPlaceholderIndex =
+              (_currentPlaceholderIndex + 1) % _searchPlaceholders.length;
+          _placeholderOpacity = 1.0;
+        });
       });
-      _showLocationSnackbar('Location permission denied. Please enable it in settings.');
+    });
+  }
+
+  void _stopPlaceholderAnimation() {
+    _placeholderTimer?.cancel();
+    _placeholderTimer = null;
+  }
+
+  Future<void> _getCurrentLocation() async {
+    // If QR is the current anchor, warn the user first
+    if (_isQrAnchored && _currentLocation != null) {
+      _showGpsSwitchDialog();
       return;
     }
+    await _fetchAndApplyGpsLocation();
+  }
+
+  void _showGpsSwitchDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF1E3A5F), Color(0xFF0D2137)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          padding: const EdgeInsets.only(top: 12, left: 24, right: 24, bottom: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Close button
+              Container(
+                alignment: Alignment.center,
+                margin: const EdgeInsets.only(bottom: 20),
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+              // GPS icon
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.gps_fixed_rounded, color: Colors.blue, size: 36),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                "Switch to your real-time location?",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+                ),
+                child: const Column(
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Note: GPS may fluctuate indoors and lack accuracy.',
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              color: Colors.amber,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.thumb_up_rounded, color: Colors.greenAccent, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Recommended: Continue with current location for accuracy.',
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              color: Colors.greenAccent,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 28),
+              Row(
+                children: [
+                  // No button
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context);
+                        // Keep current QR location — just re-center on it
+                        if (_currentLocation != null) {
+                          _mapKey.currentState?.moveToLocation(_currentLocation!, zoom: 19.0);
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white30),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'No',
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  // Yes button
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context);
+                        _fetchAndApplyGpsLocation();
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF4285F4), Color(0xFF1565C0)],
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF4285F4).withValues(alpha: 0.4),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'Yes',
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _fetchAndApplyGpsLocation() async {
+    setState(() => _isFetchingLocation = true);
 
     try {
-      // 1. Accuracy Filtering: Get position with highest accuracy
-      final Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          timeLimit: Duration(seconds: 8),
-        ),
-      );
-      
-      // 5. Filter out stale or low-accuracy data (> 35m error)
-      if (position.accuracy > 35) {
-        debugPrint("Initial location accuracy low: ${position.accuracy}m");
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        _showLocationSnackbar('⚠️ Location services are disabled. Please enable GPS.');
+        setState(() => _isFetchingLocation = false);
+        return;
       }
 
-      final LatLng newLocation = LatLng(position.latitude, position.longitude);
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          _showLocationSnackbar('⚠️ Location permission denied.');
+          setState(() => _isFetchingLocation = false);
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        _showLocationSnackbar('⚠️ Location permission permanently denied. Enable it in Settings.');
+        setState(() => _isFetchingLocation = false);
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+        ),
+      );
+
+      final newLocation = LatLng(position.latitude, position.longitude);
       setState(() {
         _isFetchingLocation = false;
         _currentLocation = newLocation;
+        _isQrAnchored = false; // Now using live GPS, not QR
       });
-      
-      // Move map to the user's location
       _mapKey.currentState?.moveToLocation(newLocation, zoom: 19.0);
-
-      if (!_isTrackingLocation) {
-        _isTrackingLocation = true;
-        _positionSubscription = Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.bestForNavigation,
-            distanceFilter: 0, // 4. Fused / Continuous updates for maximum smoothness
-          ),
-        ).listen((Position position) {
-          if (mounted) {
-            // 5. Accuracy Filtering: Ignore points with very high error margins
-            if (position.accuracy > 35) return;
-
-            setState(() {
-              // 2. Exponential Moving Average Smoothing
-              // weight: 0.3 (new), 0.7 (old) to reduce marker "jumping"
-              if (_currentLocation == null) {
-                _currentLocation = LatLng(position.latitude, position.longitude);
-              } else {
-                const double weight = 0.3;
-                double lat = (position.latitude * weight) + (_currentLocation!.latitude * (1.0 - weight));
-                double lng = (position.longitude * weight) + (_currentLocation!.longitude * (1.0 - weight));
-                _currentLocation = LatLng(lat, lng);
-              }
-            });
-          }
-        });
-      }
-
       if (_isIndoorFusionEnabled) {
         _indoorPositioningService.updateWithGps(newLocation);
       }
-
-      _showLocationSnackbar('📍 Tracking live location...');
+      _showLocationSnackbar('📍 Location updated via GPS.');
     } catch (e) {
-      setState(() {
-        _isFetchingLocation = false;
-      });
-      _showLocationSnackbar('Could not get your location. Please try again.');
+      setState(() => _isFetchingLocation = false);
+      _showLocationSnackbar('⚠️ Could not get GPS location. Try again.');
+    }
+  }
+
+  void _handleOrientationMapMovement() {
+    // Only proceed if orientation mode is active and we have locations
+    if (!_isOrientationMode || _currentLocation == null || _lastOrientationLocation == null) {
+      return;
+    }
+
+    // Calculate the heading change
+    double headingChange = _heading - _lastHeading;
+    
+    // Normalize heading change to -180 to 180 range
+    if (headingChange > 180) headingChange -= 360;
+    if (headingChange < -180) headingChange += 360;
+
+    // Only rotate map if heading changed significantly (more than 2 degrees)
+    if (headingChange.abs() > 2) {
+      _lastHeading = _heading;
+      _mapKey.currentState?.moveMapWithHeading(_currentLocation!, _heading);
     }
   }
 
@@ -560,6 +793,8 @@ class _HomeScreenState extends State<HomeScreen>
                                   setState(() {
                                     _currentLocation = anchorLoc;
                                     _selectedFloor = floor;
+                                    _userPhysicalFloor = floor;
+                                    _isQrAnchored = true; // Location set from QR
                                   });
                                   if (_isIndoorFusionEnabled) {
                                     _indoorPositioningService.updateWithGps(anchorLoc);
@@ -682,15 +917,38 @@ class _HomeScreenState extends State<HomeScreen>
     final bool hasSearchText = _searchQuery.isNotEmpty || _searchController.text.isNotEmpty;
 
     return PopScope(
-      canPop: !_isSearchFocused && _activeFilter == null && _selectedRoomName == null && !_isNavigating && !hasSearchText,
+      canPop: !_isSearchFocused && _activeFilter == null && _selectedRoomName == null && !_isNavigating && !hasSearchText && !_didShowFloorMismatchWarning,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
 
+        bool didPrompt = false;
+        if (_didShowFloorMismatchWarning && _userPhysicalFloor != null) {
+          _didShowFloorMismatchWarning = false;
+          _selectedFloor = _userPhysicalFloor!;
+          _mapKey.currentState?.setFloor(_userPhysicalFloor!);
+          if (_currentLocation != null) {
+            _mapKey.currentState?.moveToLocation(_currentLocation!, zoom: 19.0);
+          }
+          didPrompt = true;
+        }
+
         setState(() {
-          if (_isSearchFocused) {
+          if (didPrompt) {
+            _isSearchFocused = false;
+            if (_searchFocusNode.hasFocus) _searchFocusNode.unfocus();
+            _searchController.clear();
+            _searchQuery = '';
+            _selectedRoomName = null;
+            _selectedRoomCentroid = null;
+            _selectedRoomFloor = null;
+            _isNavigating = false;
+            _directionSteps = [];
+            _mapKey.currentState?.setRoute(null);
+            _mapKey.currentState?.setHighlight(null);
+          } else if (_isSearchFocused) {
             // 1. Close Search Overlay
             _isSearchFocused = false;
-            _searchFocusNode.unfocus();
+            if (_searchFocusNode.hasFocus) _searchFocusNode.unfocus();
             _searchController.clear();
             _searchQuery = '';
             _mapKey.currentState?.setHighlight(null);
@@ -719,6 +977,10 @@ class _HomeScreenState extends State<HomeScreen>
             _mapKey.currentState?.setHighlight(null);
           }
         });
+
+        if (didPrompt) {
+          _showFacilityPromptSheet();
+        }
       },
 
       child: Scaffold(
@@ -748,6 +1010,7 @@ class _HomeScreenState extends State<HomeScreen>
                 currentFloor: 0,
                 userLocation: _currentLocation,
                 heading: _heading,
+                isNavigating: _isNavigating,
                 onRoomSelected: (name, centroid) {
                   // Find the room to get its floor
                   final room = _allRooms.firstWhereOrNull((r) => r.name == name);
@@ -773,8 +1036,8 @@ class _HomeScreenState extends State<HomeScreen>
           if (!_isSearchFocused)
             Positioned(
               top: MediaQuery.of(context).padding.top + 12,
-              left: 16,
-              right: 16,
+              left: 14,
+              right: 14,
               child: _buildSearchBar(context),
             ),
 
@@ -797,7 +1060,7 @@ class _HomeScreenState extends State<HomeScreen>
           // ── 3.5. COMPASS ───────────────────────────────────────────────────
           if (!_isSearchFocused)
             Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 140, // Moved higher
+              bottom: MediaQuery.of(context).size.height * 0.60,
               right: 16,
               child: _buildCompass(),
             ),
@@ -805,7 +1068,7 @@ class _HomeScreenState extends State<HomeScreen>
           // ── 3.6. INDOOR FUSION BUTTON (above compass)
           if (!_isSearchFocused)
             Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 200,
+              bottom: MediaQuery.of(context).size.height * 0.60 + 64,
               right: 16,
               child: _buildIndoorFusionButton(),
             ),
@@ -813,10 +1076,19 @@ class _HomeScreenState extends State<HomeScreen>
           // ── 4. LOCATION BUTTON (bottom right) ──────────────────────────────
           if (!_isSearchFocused)
             Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 64, // Moved higher
-              right: 16,
+              bottom: MediaQuery.of(context).size.height * 0.60 - 75,
+              right: 8,
               child: _buildLocationButton(),
             ),
+
+          // ── 4.5. FLOOR SELECTOR (layers icon) ──────────────────────────────
+          if (!_isSearchFocused)
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.15,
+              right: 16,
+              child: _buildFloorFabMenu(),
+            ),
+
 
           // ── 5. OFFLINE OVERLAY ─────────────────────────────────────────────
           if (_isOffline)
@@ -871,14 +1143,6 @@ class _HomeScreenState extends State<HomeScreen>
               child: _buildDirectionsPanel(),
             ),
 
-          // ── 7. FLOOR SELECTOR (Top Right - FAB Menu) ──────────────────────
-          if (!_isSearchFocused)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 80,
-              right: 16,
-              child: _buildFloorFabMenu(),
-            ),
-
           ],
         ),
       ),
@@ -886,128 +1150,199 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildFloorFabMenu() {
-    final floors = [
-      {'label': '4th Floor', 'value': 4},
-      {'label': '3rd Floor', 'value': 3},
-      {'label': '2nd Floor', 'value': 2},
-      {'label': '1st Floor', 'value': 1},
-      {'label': 'Ground Floor', 'value': 0},
-    ];
+  final floors = [
+    {'label': '4th Floor', 'value': 4},
+    {'label': '3rd Floor', 'value': 3},
+    {'label': '2nd Floor', 'value': 2},
+    {'label': '1st Floor', 'value': 1},
+    {'label': 'Ground Floor', 'value': 0},
+  ];
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (_isFloorMenuOpen)
-          ...floors.map((floor) {
-            bool isSelected = _selectedFloor == floor['value'];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _selectedFloor = floor['value'] as int;
-                    _isFloorMenuOpen = false;
-                  });
-                  _mapKey.currentState?.setFloor(floor['value'] as int);
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isSelected ? const Color(0xFF5B5FEF) : Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.15),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    floor['label'] as String,
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : const Color(0xFF1E3A5F),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      fontFamily: 'googlesans',
-                    ),
-                  ),
-                ),
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+
+      // Floating Toggle Button
+      GestureDetector(
+        onTap: () {
+          setState(() {
+            _isFloorMenuOpen = !_isFloorMenuOpen;
+          });
+        },
+        child: Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.2),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
               ),
-            );
-          }),
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              _isFloorMenuOpen = !_isFloorMenuOpen;
-            });
-          },
-          child: Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
+            ],
+          ),
+          child: _isFloorMenuOpen
+              ? const Icon(Icons.close_rounded, color: Color(0xFF1E3A5F), size: 26)
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _selectedFloor == 0 ? 'G' : _selectedFloor.toString(),
+                      style: const TextStyle(
+                        color: Color(0xFF1E3A5F),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                        fontFamily: 'googlesans',
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(
+                      Icons.layers_outlined,
+                      color: Color(0xFF1E3A5F),
+                      size: 14,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: _isFloorMenuOpen
-                ? const Icon(Icons.close_rounded, color: Color(0xFF1E3A5F), size: 26)
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        _selectedFloor == 0 ? 'G' : _selectedFloor.toString(),
-                        style: const TextStyle(
-                          color: Color(0xFF1E3A5F),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                          fontFamily: 'googlesans',
+        ),
+      ),
+
+      if (_isFloorMenuOpen)
+        Padding(
+          padding: const EdgeInsets.only(top: 12.0),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 255, maxWidth: 325),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF525150), Color(0xFF525150)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.25),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: floors.map((floor) {
+                  final val = floor['value'] as int;
+                  final label = (floor['label'] as String).toUpperCase();
+                  final isSelected = _selectedFloor == val;
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10.0),
+                    child: InkWell(
+                      onTap: () {
+                        setState(() {
+                          _selectedFloor = val;
+                          _isFloorMenuOpen = false;
+                        });
+                        _mapKey.currentState?.setFloor(val);
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: isSelected
+                                ? [const Color(0xFFFFFFFF), const Color(0xFFFFFFFF)]
+                                : [const Color(0xFFDBD9CA), const Color(0xFFDBD9CA)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          children: [
+                            // Location Pin Icon
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              child: const Icon(
+                                Icons.location_on_rounded,
+                                color: Colors.black87,
+                                size: 26,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            // Floor Label
+                            Expanded(
+                              child: Center(
+                                child: Text(
+                                  label,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14,
+                                    fontFamily: 'googlesans',
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 2),
-                      const Icon(
-                        Icons.layers_outlined,
-                        color: Color(0xFF1E3A5F),
-                        size: 14,
-                      ),
-                    ],
-                  ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
           ),
         ),
-      ],
-    );
-  }
+    ],
+  );
+}
 
   Widget _buildCompass() {
     return GestureDetector(
       onTap: () {
-        // Reset map rotation to North
-        _mapKey.currentState?.resetRotation();
+        setState(() {
+          _isOrientationMode = !_isOrientationMode;
+          if (_isOrientationMode) {
+            // Entering orientation mode: lock map to current heading
+            _lastOrientationLocation = _currentLocation;
+            _lastHeading = _heading;
+            _mapKey.currentState?.rotateMapToHeading(_heading);
+            _showLocationSnackbar('🧭 Orientation mode active - move your phone to navigate');
+          } else {
+            // Exiting orientation mode: reset rotation to North
+            _mapKey.currentState?.resetRotation();
+            _showLocationSnackbar('🧭 Orientation mode deactivated');
+          }
+        });
       },
       child: Container(
         width: 48,
         height: 48,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _isOrientationMode ? const Color(0xFFD9534F) : Colors.white,
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 10,
+              color: _isOrientationMode 
+                ? const Color(0xFFD9534F).withValues(alpha: 0.4) 
+                : Colors.black.withValues(alpha: 0.1),
+              blurRadius: _isOrientationMode ? 12 : 10,
               offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Transform.rotate(
           angle: (_heading * (3.14159 / 180) * -1),
-          child: const Icon(Icons.explore_rounded, color: Color(0xFFD9534F), size: 32),
+          child: Icon(
+            Icons.explore_rounded, 
+            color: _isOrientationMode ? Colors.white : const Color(0xFFD9534F), 
+            size: 32
+          ),
         ),
       ),
     );
@@ -1252,29 +1587,8 @@ class _HomeScreenState extends State<HomeScreen>
                     autofocus: true,
                     showCursor: true,
                     cursorColor: Colors.blueAccent,
-                    cursorWidth: 2,
-                    cursorHeight: 20,
-                    cursorRadius: const Radius.circular(2),
-                    keyboardType: TextInputType.text,
-                    textInputAction: TextInputAction.search,
-                    textAlignVertical: TextAlignVertical.center,
-                    onChanged: (val) {
-                      setState(() {
-                        _searchQuery = val;
-                        if (_activeFilter != null) {
-                          _activeFilter = null;
-                          // Remove highlight when user types manually
-                          _mapKey.currentState?.setHighlight(null);
-                        }
-                      });
-                    },
-                    style: const TextStyle(
-                      fontFamily: 'googlesans',
-                      fontSize: 15,
-                      color: Colors.black87,
-                    ),
                     decoration: InputDecoration(
-                      hintText: 'Search location',
+                      // hintText: 'Search location',
                       hintStyle: TextStyle(
                         fontFamily: 'googlesans',
                         color: Colors.black.withValues(alpha: 0.38),
@@ -1295,6 +1609,27 @@ class _HomeScreenState extends State<HomeScreen>
                               },
                             )
                           : null,
+                    ),
+                    cursorWidth: 2,
+                    cursorHeight: 20,
+                    cursorRadius: const Radius.circular(2),
+                    keyboardType: TextInputType.text,
+                    textInputAction: TextInputAction.search,
+                    textAlignVertical: TextAlignVertical.center,
+                    onChanged: (val) {
+                      setState(() {
+                        _searchQuery = val;
+                        if (_activeFilter != null) {
+                          _activeFilter = null;
+                          // Remove highlight when user types manually
+                          _mapKey.currentState?.setHighlight(null);
+                        }
+                      });
+                    },
+                    style: const TextStyle(
+                      fontFamily: 'googlesans',
+                      fontSize: 15,
+                      color: Colors.black87,
                     ),
                   ),
                 ),
@@ -2106,6 +2441,51 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  void _startNavigation({required bool enableCompass}) {
+    if (_selectedRoomCentroid == null) return;
+
+    if (_userPhysicalFloor != null && _selectedRoomFloor != _userPhysicalFloor) {
+      _didShowFloorMismatchWarning = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Please move to Floor $_selectedRoomFloor and scan a nearby QR code to get directions.',
+                  style: const TextStyle(fontFamily: 'googlesans', fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFFD32F2F),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isNavigating = true;
+      if (enableCompass) {
+        _isOrientationMode = true;
+        if (_currentLocation != null) {
+          _lastOrientationLocation = _currentLocation;
+        }
+      }
+    });
+    
+    _mapKey.currentState?.showDirectionsTo(
+      _selectedRoomCentroid!,
+      destinationFloor: _selectedRoomFloor,
+    );
+  }
+
   Widget _buildDirectionsPanel() {
     return _isNavigating ? _buildNavigationBar() : _buildRoomDetailSheet();
   }
@@ -2193,12 +2573,7 @@ class _HomeScreenState extends State<HomeScreen>
               const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: () {
-                  if (_selectedRoomCentroid != null) {
-                    _mapKey.currentState?.showDirectionsTo(
-                      _selectedRoomCentroid!,
-                      destinationFloor: _selectedRoomFloor,
-                    );
-                  }
+                  _startNavigation(enableCompass: true);
                 },
                 icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 17),
                 label: const Text(
@@ -2376,13 +2751,7 @@ class _HomeScreenState extends State<HomeScreen>
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          if (_selectedRoomCentroid != null) {
-                            setState(() => _isNavigating = true);
-                            _mapKey.currentState?.showDirectionsTo(
-                              _selectedRoomCentroid!,
-                              destinationFloor: _selectedRoomFloor,
-                            );
-                          }
+                          _startNavigation(enableCompass: false);
                         },
                         icon: const Icon(Icons.directions_rounded, color: Colors.white, size: 18),
                         label: const Text(
@@ -2406,13 +2775,7 @@ class _HomeScreenState extends State<HomeScreen>
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          if (_selectedRoomCentroid != null) {
-                            setState(() => _isNavigating = true);
-                            _mapKey.currentState?.showDirectionsTo(
-                              _selectedRoomCentroid!,
-                              destinationFloor: _selectedRoomFloor,
-                            );
-                          }
+                          _startNavigation(enableCompass: true);
                         },
                         icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 18),
                         label: const Text(
@@ -2708,7 +3071,7 @@ Widget _buildSearchBar(BuildContext context) {
           filter: ui.ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
           child: Container(
             height: focused ? 56 : 52,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+            padding: const EdgeInsets.only(left: 10, right: 6),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(10),
@@ -2741,31 +3104,44 @@ Widget _buildSearchBar(BuildContext context) {
               children: [
                 // Search icon
                 Container(
-                  width: 36,
-                  height: 36,
+                  width: 45,
+                  height: 45,
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.black.withValues(alpha: 0.3)),
+                    // border: Border.all(color: Colors.black.withValues(alpha: 0.3)),
                   ),
                   child: const Icon(Icons.search, color: Colors.black, size: 22),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 2),
 
                 // Search label and query preview
                 Expanded(
-                  child: Text(
-                    _searchQuery.isEmpty ? 'Search rooms, labs, halls...' : _searchQuery,
-                    style: TextStyle(
-                      fontFamily: 'googlesans',
-                      fontSize: 15,
-                      color: _searchQuery.isEmpty
-                          ? Colors.black.withValues(alpha: 0.45)
-                          : Colors.black87,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  child: _searchQuery.isEmpty
+                      ? AnimatedOpacity(
+                          opacity: _placeholderOpacity,
+                          duration: const Duration(milliseconds: 400),
+                          child: Text(
+                            _searchPlaceholders[_currentPlaceholderIndex],
+                            style: TextStyle(
+                              fontFamily: 'googlesans',
+                              fontSize: 16,
+                              color: Colors.black.withValues(alpha: 0.45),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        )
+                      : Text(
+                          _searchQuery,
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 16,
+                            color: Colors.black87,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                 ),
 
                 // Clear button or QR/Profile actions
@@ -2773,11 +3149,32 @@ Widget _buildSearchBar(BuildContext context) {
                   IconButton(
                     icon: const Icon(Icons.close_rounded, color: Colors.black, size: 20),
                     onPressed: () {
+                      bool didPrompt = false;
+                      if (_didShowFloorMismatchWarning && _userPhysicalFloor != null) {
+                        _didShowFloorMismatchWarning = false;
+                        _selectedFloor = _userPhysicalFloor!;
+                        _mapKey.currentState?.setFloor(_userPhysicalFloor!);
+                        if (_currentLocation != null) {
+                          _mapKey.currentState?.moveToLocation(_currentLocation!, zoom: 19.0);
+                        }
+                        didPrompt = true;
+                      }
+
                       setState(() {
                         _searchController.clear();
                         _searchQuery = '';
+                        _selectedRoomName = null;
+                        _selectedRoomCentroid = null;
+                        _selectedRoomFloor = null;
+                        _isNavigating = false;
+                        _directionSteps = [];
+                        _mapKey.currentState?.setRoute(null);
                         _mapKey.currentState?.setHighlight(null);
                       });
+
+                      if (didPrompt) {
+                        _showFacilityPromptSheet();
+                      }
                     },
                   )
                 else
@@ -2785,34 +3182,38 @@ Widget _buildSearchBar(BuildContext context) {
                     children: [
                       // QR Scanner button
                       IconButton(
-                        icon: const Icon(Icons.qr_code_scanner, color: Colors.black, size: 22),
+                        icon: const Icon(Icons.qr_code_scanner, color: Colors.black, size: 25),
                         onPressed: () => _showQrScanner(context),
                       ),
+
                       // Profile icon button
-                      GestureDetector(
-                        onTap: () => _showProfileMenu(context),
-                        child: CircleAvatar(
-                          radius: 16,
-                          backgroundColor: Colors.blue.withValues(alpha: 0.2),
-                          child: Text(
-                            _getUserInitial(),
-                            style: const TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold,
+                      Padding(
+                        padding: const EdgeInsets.only(right: 0),
+                        child: GestureDetector(
+                          onTap: () => _showProfileMenu(context),
+                          child: CircleAvatar(
+                            radius: 20,
+                            backgroundColor: Colors.blue.withValues(alpha: 0.2),
+                            child: Text(
+                              _getUserInitial(),
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ],
                   ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   // ── LOCATION BUTTON ───────────────────────────────────────────────────────
   Widget _buildLocationButton() {
@@ -2935,6 +3336,261 @@ Widget _buildSearchBar(BuildContext context) {
         ),
       ),
     );
+  }
+
+  void _showFacilityPromptSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFFFFB703), Color(0xFFFB8500)], // Vibrant yellow to orange
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          padding: const EdgeInsets.only(top: 12, left: 24, right: 24, bottom: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Small top handle or close button
+              Container(
+                alignment: Alignment.center,
+                margin: const EdgeInsets.only(bottom: 24),
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+              const Text(
+                "Looking for the nearest elevator or stairs?",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 32),
+              // Option 1: Yes
+              _buildOptionCard(
+                title: "Yes",
+                subtitle: "Find the quickest route between floors",
+                icon: Icons.directions_run_rounded,
+                iconColor: Colors.redAccent,
+                iconBgColor: Colors.red.withValues(alpha: 0.15),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showFacilitySelectionSheet();
+                },
+              ),
+              const SizedBox(height: 16),
+              // Option 2: No
+              _buildOptionCard(
+                title: "No, choose manually",
+                subtitle: "Dismiss and explore the map",
+                icon: Icons.map_rounded,
+                iconColor: Colors.blueAccent,
+                iconBgColor: Colors.blue.withValues(alpha: 0.15),
+                onTap: () {
+                  Navigator.pop(context);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showFacilitySelectionSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFFFFB703), Color(0xFFFB8500)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          padding: const EdgeInsets.only(top: 12, left: 24, right: 24, bottom: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                alignment: Alignment.center,
+                margin: const EdgeInsets.only(bottom: 24),
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+              const Text(
+                "Choose:",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 32),
+              // Lift
+              _buildOptionCard(
+                title: "Lift",
+                subtitle: "Navigate to the nearest elevator",
+                icon: Icons.elevator_rounded,
+                iconColor: Colors.green,
+                iconBgColor: Colors.green.withValues(alpha: 0.15),
+                onTap: () {
+                  Navigator.pop(context);
+                  _routeToNearestFacility('lift');
+                },
+              ),
+              const SizedBox(height: 16),
+              // Staircase
+              _buildOptionCard(
+                title: "Staircase",
+                subtitle: "Navigate to the nearest stairs",
+                icon: Icons.stairs_rounded,
+                iconColor: Colors.orange,
+                iconBgColor: Colors.orange.withValues(alpha: 0.15),
+                onTap: () {
+                  Navigator.pop(context);
+                  _routeToNearestFacility('staircase');
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildOptionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color iconColor,
+    required Color iconBgColor,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontFamily: 'googlesans',
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontFamily: 'googlesans',
+                      fontSize: 13,
+                      color: Colors.black45,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: iconBgColor,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: iconColor, size: 28),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _routeToNearestFacility(String type) {
+    if (_userPhysicalFloor == null || _currentLocation == null) return;
+
+    RoomSearchItem? nearestFacility;
+    double minDistance = double.infinity;
+    const distanceCalculator = Distance();
+
+    for (var room in _allRooms) {
+      if (room.floor == _userPhysicalFloor && room.type.toLowerCase() == type) {
+        double dist = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, room.centroid);
+        if (dist < minDistance) {
+          minDistance = dist;
+          nearestFacility = room;
+        }
+      }
+    }
+
+    if (nearestFacility != null) {
+      setState(() {
+        _searchQuery = nearestFacility!.name;
+        _searchController.text = nearestFacility.name;
+        _selectedRoomName = nearestFacility.name;
+        _selectedRoomCentroid = nearestFacility.centroid;
+        _selectedRoomFloor = nearestFacility.floor;
+        _isNavigating = true;
+        _isOrientationMode = true;
+        _lastOrientationLocation = _currentLocation;
+      });
+      _mapKey.currentState?.selectAndFocusRoom(nearestFacility.floor, nearestFacility.name, nearestFacility.centroid);
+      _mapKey.currentState?.showDirectionsTo(
+        nearestFacility.centroid,
+        destinationFloor: nearestFacility.floor,
+      );
+    }
   }
 }
 
