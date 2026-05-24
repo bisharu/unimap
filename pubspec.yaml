@@ -50,6 +50,7 @@ dependencies:
   url_launcher: ^6.3.0
   google_generative_ai: ^0.4.7
   geolocator: ^13.0.2
+  video_player: ^2.11.0
 
 dev_dependencies:
   flutter_test:
@@ -88,6 +89,7 @@ flutter:
 
   assets: 
     - assets/images/adbuLogo.png
+    - assets/Video/way.mp4
     - assets/images/unimapLogo.png
     - assets/images/unimapIcon.png
     - assets/images/aiButton.png

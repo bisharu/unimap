@@ -3054,7 +3054,6 @@ Widget _buildSearchBar(BuildContext context) {
     child: AnimatedContainer(
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         boxShadow: [
           BoxShadow(
@@ -3065,21 +3064,23 @@ Widget _buildSearchBar(BuildContext context) {
         ],
         borderRadius: BorderRadius.circular(28),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-          child: Container(
-            height: focused ? 56 : 52,
-            padding: const EdgeInsets.only(left: 10, right: 6),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                width: 2,
-                // Neon gradient border
-                color: Colors.transparent,
-              ),
+      child: AnimatedRotatingBorder(
+        borderRadius: 28,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(25),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
+            child: Container(
+              height: focused ? 56 : 52,
+              padding: const EdgeInsets.only(left: 10, right: 6),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(25),
+                border: Border.all(
+                  width: 2,
+                  // Neon gradient border
+                  color: Colors.transparent,
+                ),
               // gradient: const LinearGradient(
               //   colors: [Color(0xFFFF00FF), Color(0xFF00BFFF)], // pink → blue
               //   begin: Alignment.centerLeft,
@@ -3212,8 +3213,9 @@ Widget _buildSearchBar(BuildContext context) {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ── LOCATION BUTTON ───────────────────────────────────────────────────────
   Widget _buildLocationButton() {
@@ -3867,4 +3869,51 @@ class RoomSearchItem {
     required this.floor,
     required this.centroid,
   });
+}
+
+class AnimatedRotatingBorder extends StatefulWidget {
+  final Widget child;
+  final double borderRadius;
+  const AnimatedRotatingBorder({super.key, required this.child, this.borderRadius = 28});
+
+  @override
+  State<AnimatedRotatingBorder> createState() => _AnimatedRotatingBorderState();
+}
+
+class _AnimatedRotatingBorderState extends State<AnimatedRotatingBorder> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          padding: const EdgeInsets.all(1.0),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(widget.borderRadius),
+            gradient: SweepGradient(
+              colors: const [Colors.green, Colors.red, Colors.blue, Colors.green],
+              stops: const [0.0, 0.33, 0.66, 1.0],
+              transform: GradientRotation(_controller.value * 2 * 3.1415926535),
+            ),
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
 }

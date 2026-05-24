@@ -108,26 +108,45 @@ class _LoginState extends State<Login> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Container(
+      backgroundColor: const Color(0xFF1B1832), // Dark purple/blue background
+      body: SizedBox(
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFDCD6CA),
-              Color(0xFF6E7A6E),
-            ],
-          ),
-        ),
         child: Stack(
           children: [
+            // Curved Background Card covering logo and text
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                height: 350,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF983F76), Color(0xFF4B2361)], // Pinkish-purple to dark purple
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  borderRadius: BorderRadius.vertical(
+                    bottom: Radius.elliptical(screenWidth, 120),
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 15,
+                      offset: Offset(0, 5),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            
             SingleChildScrollView(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(40.0, 180.0, 40.0, 80.0),
+                padding: const EdgeInsets.fromLTRB(40.0, 160.0, 40.0, 80.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -137,10 +156,10 @@ class _LoginState extends State<Login> {
                         fontSize: 42,
                         fontWeight: FontWeight.w800,
                         height: 1.1,
-                        color: Colors.black,
+                        color: Colors.white, // White text for contrast
                       ),
                     ),
-                    const SizedBox(height: 80),
+                    const SizedBox(height: 110), // Pushes text fields down below the curve
 
                     // ID Field
                     TextField(
@@ -197,11 +216,11 @@ class _LoginState extends State<Login> {
                         child: const Text(
                           'Forgot password?',
                           style: TextStyle(
-                            color: Color(0xFF0040FF),
+                            color: Color(0xFFC084FC), // Light purple link
                             fontSize: 16,
                             fontWeight: FontWeight.w500,
                             decoration: TextDecoration.underline,
-                            decorationColor: Color(0xFF0040FF),
+                            decorationColor: Color(0xFFC084FC),
                           ),
                         ),
                       ),
@@ -215,7 +234,7 @@ class _LoginState extends State<Login> {
                       child: ElevatedButton(
                         onPressed: _isLoading ? null : _handleLogin,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF1E5D6A),
+                          backgroundColor: const Color(0xFFB53471), // Match the curved card
                           elevation: 5,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30),
@@ -237,15 +256,19 @@ class _LoginState extends State<Login> {
                 ),
               ),
             ),
+            
+            // LOGO
             Positioned(
-              top: 30,
-              right: 0,
+              top: 40,
+              right: 10,
               child: Image.asset(
                 'assets/images/adbuLogo.png',
-                width: 145,
-                height: 145,
+                width: 130,
+                height: 130,
               ),
             ),
+            
+            // BACK BUTTON
             Positioned(
               top: MediaQuery.of(context).padding.top + 16,
               left: 20,
@@ -255,12 +278,12 @@ class _LoginState extends State<Login> {
                   filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.25),
+                      color: Colors.white.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.5),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1.5),
                     ),
                     child: IconButton(
-                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black, size: 20),
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
                       onPressed: () => Navigator.pop(context),
                     ),
                   ),

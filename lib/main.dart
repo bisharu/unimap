@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'login.dart';
 import 'signup.dart';
+import 'package:video_player/video_player.dart';
 import 'homescreen.dart';
 import 'upload_rooms.dart'; // Import the upload script
 
@@ -101,187 +102,188 @@ import 'upload_rooms.dart'; // Import the upload script
     }
   }
 
-  class WelcomeScreen extends StatelessWidget {
+  class WelcomeScreen extends StatefulWidget {
     const WelcomeScreen({super.key});
+
+    @override
+    State<WelcomeScreen> createState() => _WelcomeScreenState();
+  }
+
+  class _WelcomeScreenState extends State<WelcomeScreen> {
+    late VideoPlayerController _controller;
+
+    @override
+    void initState() {
+      super.initState();
+      _controller = VideoPlayerController.asset('assets/Video/way.mp4')
+        ..initialize().then((_) {
+          _controller.setLooping(true);
+          _controller.play();
+          setState(() {});
+        });
+    }
+
+    @override
+    void dispose() {
+      _controller.dispose();
+      super.dispose();
+    }
 
     @override
     Widget build(BuildContext context) {
       return Scaffold(
+        backgroundColor: Colors.white,
         body: Stack(
           children: [
-            // 1. BACKGROUND GRADIENT
-            Container(
-              width: double.infinity,
-              height: double.infinity,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF293C60), Color(0xFF000000)],
-                  stops: [0.0, 0.6],
+            if (_controller.value.isInitialized)
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.60,
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: _controller.value.size.width,
+                      height: _controller.value.size.height,
+                      child: VideoPlayer(_controller),
+                    ),
+                  ),
                 ),
               ),
-            ),
-
-            // 2. TOP RIGHT IMAGE
-            Positioned(
-              top: 30,
-              right: 0,
-              child: Image.asset(
-                'assets/images/adbuLogo.png',
-                width: 145,
-                height: 145,
-              ),
-            ),
-
-            // 3. MAIN CONTENT
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 200.0),
-                  
-                  // Welcome Text
-                  TweenAnimationBuilder<double>(
-                    tween: Tween<double>(begin: 0.0, end: 1.0),
-                    duration: const Duration(milliseconds: 1700),
-                    curve: Curves.easeOutCubic,
-                    builder: (context, value, child) {
-                      return Transform.translate(
-                        offset: Offset(-40 * (1 - value), 0),
-                        child: Opacity(
-                          opacity: value,
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: ShaderMask(
-                      shaderCallback: (Rect bounds) => const LinearGradient(
-                        colors: [Color(0xFF9e4444), Color(0xFFd45b5b)],
-                      ).createShader(bounds),
-                      child: const Text(
-                        'Welcome to',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 35,
-                          fontWeight: FontWeight.w800,
-                          wordSpacing: 2.0,
-                        ),
-                      ),
-                    ),
+            SafeArea(
+              top: false,
+              child: Center(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 5),
+                  // Logo
+                  Image.asset(
+                    'assets/images/adbuLogo.png',
+                    width: 170,
+                    height: 170,
                   ),
+                  const SizedBox(height: 7),
                   
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 100.0),
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween<double>(begin: 0.0, end: 1.0),
-                      duration: const Duration(milliseconds: 1700),
-                      curve: Curves.easeOutExpo,
-                      builder: (context, value, child) {
-                        return Transform.translate(
-                          offset: Offset(0, 50 * (1 - value)),
-                          child: Opacity(
-                            opacity: value,
-                            child: child,
-                          ),
-                        );
-                      },
-                      child: ShaderMask(
-                        shaderCallback: (Rect bounds) {
-                          return const LinearGradient(
-                            colors: [Color(0xFF3b359c), Color(0xFF6157fa)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ).createShader(bounds);
-                        },
-                        child: const Text(
-                          'UniMap',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 65,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
+                  // Welcome to
+                  RichText(
+                    text: const TextSpan(
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: 'googlesans',
                       ),
-                    ),
-                  ),
-
-                  // AUTHENTICATION BUTTONS
-                  Center(
-                    child: Column(
                       children: [
-                        _buildGradientButton(context, 'Login'),
-                        const SizedBox(height: 25),
-                        _buildGradientButton(context, 'Sign Up'),
-                        const SizedBox(height: 25),
-                        TextButton(
-                          onPressed: () async {
-                            try {
-                              await FirebaseAuth.instance.signInAnonymously();
-                              if (context.mounted) {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(builder: (context) => const HomeScreen()),
-                                );
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text("Guest Login Error: ${e.toString()}")),
-                                );
-                              }
-                            }
-                          },
-                          child: const Text(
-                            'Continue as Guest',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              decoration: TextDecoration.underline,
-                              fontSize: 21,
-                            ),
-                          ),
+                        TextSpan(
+                          text: 'Welcome ',
+                          style: TextStyle(color: Color(0xFFA63C4F)), // Maroon/Red
+                        ),
+                        TextSpan(
+                          text: 'to',
+                          style: TextStyle(color: Color(0xFF3C3580)), // Dark Purple
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 60),
+                  
+                  const SizedBox(height: 10),
+                  
+                  // UniMap
+                  const Text(
+                    'UniMap',
+                    style: TextStyle(
+                      color: Color(0xFF283A7E), // Dark blue
+                      fontSize: 65,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -1,
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 25),
+                  
+                  // Buttons
+                  _buildGlowButton(context, 'Login'),
+                  const SizedBox(height: 25),
+                  _buildGlowButton(context, 'Sign Up'),
+                  
+                  const SizedBox(height: 25),
+                  
+                  // Continue as Guest
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        await FirebaseAuth.instance.signInAnonymously();
+                        if (context.mounted) {
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(builder: (context) => const HomeScreen()),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Guest Login Error: ${e.toString()}")),
+                          );
+                        }
+                      }
+                    },
+                    child: const Text(
+                      'Continue as Guest',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+    Widget _buildGlowButton(BuildContext context, String text) {
+      return Container(
+        width: 280,
+        height: 60,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(15),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF8B47FA).withOpacity(0.4), // Purple glow
+              blurRadius: 25,
+              spreadRadius: 2,
+              offset: const Offset(0, 5),
+            ),
           ],
         ),
-      );
-    }
-
-    Widget _buildGradientButton(BuildContext context, String text) {
-      return Container(
-        width: 300,
-        height: 55,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF233587), Color(0xFF2975f0)],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-          ),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: ElevatedButton(
-          onPressed: () {
-            if (text == 'Login') {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => const Login()));
-            } else if (text == 'Sign Up') {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => const SignUp()));
-            }
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          ),
-          child: Text(
-            text,
-            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(15),
+            onTap: () {
+              if (text == 'Login') {
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const Login()));
+              } else if (text == 'Sign Up') {
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const SignUp()));
+              }
+            },
+            child: Center(
+              child: Text(
+                text,
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
           ),
         ),
       );
