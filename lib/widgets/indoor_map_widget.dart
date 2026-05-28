@@ -303,8 +303,8 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
         final bool hasName = displayName.isNotEmpty && (hasExplicitName || (!isStructuralType && !isPath));
         
         final bool isFiltering = _highlightType != null;
-        final bool typeMatches = isFiltering &&
-            (type.contains(_highlightType!) || _highlightType!.contains(type));
+        final String query = isFiltering ? _highlightType!.toLowerCase() : '';
+        final bool typeMatches = isFiltering && _isMatch(query, type, displayName.toLowerCase(), roomNo.toLowerCase());
 
         // Category-based coloring with soft modern tones
         final Color baseColor = _getRoomColor(type);
@@ -435,13 +435,23 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       }
       
       // Prominent markers (selected/filtered) have higher tolerance or are always shown
-      if (bypassDeconfliction || !hasCollision || m['isSelected']) {
+      if (bypassDeconfliction || !hasCollision || m['isSelected'] || m['typeMatches']) {
+        Widget markerChild = _buildMarkerWidget(name, roomNo, type, m['isSelected'], isHighlighted: m['typeMatches']);
+        
+        // Shift Reception Area slightly to the left so it doesn't block the user location blue dot
+        if (name.toLowerCase().contains('reception')) {
+          markerChild = Transform.translate(
+            offset: const Offset(-45, 0), // Move it left by 45 pixels
+            child: markerChild,
+          );
+        }
+
         markers.add(Marker(
           point: point,
           width: w,
           height: h,
           rotate: true,
-          child: _buildMarkerWidget(name, roomNo, type, m['isSelected']),
+          child: markerChild,
         ));
         if (!bypassDeconfliction) {
           occupiedRects.add(rect.inflate(4)); // Add some padding between labels
@@ -451,10 +461,11 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     return markers;
   }
 
-  Widget _buildMarkerWidget(String name, String roomNo, String type, bool isSelected) {
+  Widget _buildMarkerWidget(String name, String roomNo, String type, bool isSelected, {bool isHighlighted = false}) {
+    final bool emphasize = isSelected || isHighlighted;
     final Color categoryColor = _getRoomColor(type);
     // Use a darker version of the category color for icons to ensure contrast
-    final Color iconColor = isSelected ? Colors.white : HSLColor.fromColor(categoryColor).withLightness(0.4).toColor();
+    final Color iconColor = emphasize ? Colors.white : HSLColor.fromColor(categoryColor).withLightness(0.4).toColor();
     final bool hasRoomNo = roomNo.isNotEmpty && roomNo != 'null' && !roomNo.startsWith('G');
     
     return Center(
@@ -465,17 +476,17 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: isSelected ? const Color(0xFF5B5FEF) : Colors.white,
+              color: emphasize ? const Color(0xFF5B5FEF) : Colors.white,
               shape: BoxShape.circle,
               border: Border.all(
-                color: isSelected ? Colors.white : iconColor.withValues(alpha: 0.8),
-                width: isSelected ? 2 : 1,
+                color: emphasize ? Colors.white : iconColor.withValues(alpha: 0.8),
+                width: emphasize ? 2 : 1,
               ),
             ),
             child: Icon(
               _getRoomIcon(type),
-              size: isSelected ? 15 : 12,
-              color: isSelected ? Colors.white : iconColor,
+              size: emphasize ? 15 : 12,
+              color: emphasize ? Colors.white : iconColor,
             ),
           ),
           const SizedBox(height: 3),
@@ -485,7 +496,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(4),
-              border: isSelected 
+              border: emphasize 
                 ? Border.all(color: const Color(0xFF5B5FEF), width: 2) 
                 : Border.all(color: Colors.black12, width: 0.5),
             ),
@@ -496,7 +507,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                 Text(
                   name,
                   style: TextStyle(
-                    fontSize: isSelected ? 12 : 10,
+                    fontSize: emphasize ? 12 : 10,
                     fontWeight: FontWeight.bold,
                     color: Colors.black87,
                     fontFamily: 'googlesans',
@@ -514,9 +525,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                   Text(
                     'Rm $roomNo',
                     style: TextStyle(
-                      fontSize: isSelected ? 9 : 7.5,
+                      fontSize: emphasize ? 10 : 9,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? const Color(0xFF5B5FEF) : Colors.black54,
+                      color: emphasize ? const Color(0xFF5B5FEF) : Colors.black54,
                       fontFamily: 'googlesans',
                       letterSpacing: 0.2,
                     ),
@@ -935,18 +946,63 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     }
   }
 
+  bool _isMatch(String query, String roomType, String roomName, String roomNo) {
+    if (query.isEmpty) return false;
+    
+    // 1. Exact Predefined Chip Mappings
+    if (query == 'washrooms' && roomType == 'washroom') return true;
+    if (query == 'faculty cabins' && roomType == 'cabin') return true;
+    if (query == 'computer labs' && roomType == 'lab') return true;
+    if (query == 'cafeteria' && roomType == 'cafeteria') return true;
+
+    // 2. Strict Type Match (exact or simple plural)
+    if (roomType.isNotEmpty) {
+      if (roomType == query || roomType + 's' == query || query + 's' == roomType) return true;
+      if (roomType.length > 4 && query.contains(roomType)) return true;
+    }
+
+    // 3. Name or Number Match
+    if (roomName.isNotEmpty && roomName.contains(query)) return true;
+    if (roomNo.isNotEmpty && roomNo.contains(query)) return true;
+
+    return false;
+  }
+
+  bool hasLocationsOfType(String type) {
+    final geoJson = _geoJsonCache[_selectedFloor];
+    if (geoJson == null) return false;
+    final String query = type.toLowerCase();
+    for (final feature in geoJson['features']) {
+      final properties = feature['properties'];
+      final String roomType = (properties['type'] ?? '').toString().toLowerCase();
+      final String rawName = (properties['name'] ?? '').toString().toLowerCase();
+      final String roomNo = (properties['roomNo'] ?? '').toString().trim().toLowerCase();
+      final String roomName = rawName.isNotEmpty && rawName != 'null' ? rawName : roomNo;
+      
+      if (_isMatch(query, roomType, roomName, roomNo)) return true;
+    }
+    return false;
+  }
+
   /// Call from HomeScreen whenever the active filter changes.
-  void setHighlight(String? type) {
+  bool setHighlight(String? type) {
+    bool hasMatches = true;
+    if (type != null) {
+      hasMatches = hasLocationsOfType(type);
+    }
+    
     if (_highlightType != type) {
       _highlightType = type;
       _updateMapObjects();
-      if (type != null) {
-        // Delay slightly to ensure UI has updated or to provide a smoother transition
-        Future.delayed(const Duration(milliseconds: 100), () {
-          _zoomToFilteredRooms(type);
-        });
-      }
     }
+    
+    if (type != null && hasMatches) {
+      // Delay slightly to ensure UI has updated or to provide a smoother transition
+      Future.delayed(const Duration(milliseconds: 100), () {
+        _zoomToFilteredRooms(type);
+      });
+    }
+    return hasMatches;
   }
 
   void _zoomToFilteredRooms(String type) {
@@ -963,7 +1019,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       final String roomNo = (properties['roomNo'] ?? '').toString().trim().toLowerCase();
       final String roomName = rawName.isNotEmpty && rawName != 'null' ? rawName : roomNo;
       
-      if (roomType.contains(query) || query.contains(roomType) || roomName.contains(query) || roomNo.contains(query)) {
+      if (_isMatch(query, roomType, roomName, roomNo)) {
         final geometry = feature['geometry'];
         if (geometry['type'] == 'Polygon') {
           final coords = geometry['coordinates'][0] as List;
@@ -979,7 +1035,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       _mapController.fitCamera(
         CameraFit.bounds(
           bounds: bounds,
-          padding: const EdgeInsets.all(100), // Generous padding to see surrounding context
+          padding: const EdgeInsets.all(40), // Safe padding to see surrounding context
           maxZoom: 21.0, // Don't zoom in too much for single rooms
         ),
       );
@@ -1075,9 +1131,9 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                         },
           ),
           children: [
-            // Neo-minimal map style with black roads
+            // Google Satellite map style
             TileLayer(
-              urlTemplate: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=s.t:2|s.e:g|p.c:%23f4f4f4,s.t:6|s.e:g|p.c:%23d4dadc,s.t:3|s.e:g|p.c:%23000000,s.t:4|p.v:off,s.t:all|s.e:l|p.v:off',
+              urlTemplate: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
               userAgentPackageName: 'com.example.unimap',
             ),
             
@@ -1145,35 +1201,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           ],
         ),
 
-        // ── FLOOR TRANSITION HINT ───────────────────────────────────────────
-        if (_getNextFloorInPath() != null)
-          Positioned(
-            bottom: 20,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                child: ElevatedButton.icon(
-                  onPressed: () => setFloor(_getNextFloorInPath()!),
-                  icon: Icon(_getNextFloorInPath()! > _selectedFloor ? Icons.unfold_more : Icons.unfold_less),
-                  label: Text(
-                    _selectedFloor == _currentFullRoute?.first.floor && !_currentFullRoute!.any((p) => p.floor == _selectedFloor)
-                    ? "Go to Floor ${_getNextFloorInPath()}"
-                    : "Continue on Floor ${_getNextFloorInPath()}",
-                    style: const TextStyle(fontFamily: 'googlesans', fontWeight: FontWeight.bold),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF5B5FEF),
-                    foregroundColor: Colors.white,
-                    elevation: 8,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                  ),
-                ),
-              ),
-            ),
-          ),
+
       ],
     );
   }

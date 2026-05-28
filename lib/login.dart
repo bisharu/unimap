@@ -17,6 +17,7 @@ class _LoginState extends State<Login> {
   final TextEditingController _idController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _isObscure = true;
 
   String? _validateId(String id) => UniUtils.validateStudentId(id);
 
@@ -188,13 +189,24 @@ class _LoginState extends State<Login> {
                     // Password Field
                     TextField(
                       controller: _passwordController,
-                      obscureText: true,
+                      obscureText: _isObscure,
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white,
                         hintText: 'Password',
                         hintStyle: const TextStyle(color: Colors.grey),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 20),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _isObscure ? Icons.visibility_off : Icons.visibility,
+                            color: Colors.grey,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _isObscure = !_isObscure;
+                            });
+                          },
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
                           borderSide: BorderSide.none,

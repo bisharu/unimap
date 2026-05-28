@@ -79,9 +79,10 @@ class _HomeScreenState extends State<HomeScreen>
   double _lastHeading = 0; // Previous heading to detect changes
 
   // Geofencing security state variables
-  // bool _geofenceBypass = false;
-  // int _devTapCount = 0;
-  // DateTime? _lastDevTap;
+  bool _geofenceBypass = false;
+  int _devTapCount = 0;
+  DateTime? _lastDevTap;
+  bool _isGuestBlocked = true; // Block guests by default until GPS confirms they are inside
   StreamSubscription? _connectivitySubscription;
   StreamSubscription? _compassSubscription;
   String? _selectedRoomName;
@@ -101,6 +102,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
       if (hasFocus) {
         _stopPlaceholderAnimation();
+        _checkFirstTimeQRGuide();
       } else {
         _startPlaceholderAnimation();
       }
@@ -131,12 +133,93 @@ class _HomeScreenState extends State<HomeScreen>
       if (mounted) {
         setState(() => _isInitializing = false);
         _getCurrentLocation(); // Automatically get location on startup
+        
+        // As a fallback for guests, immediately check geofence gate
+        _checkGuestGeofence();
       }
     });
     _fetchUserName();
     _loadAllRoomsData();
     _loadRecentSearches();
     _seedFacultyCabins(); // Self-healing background faculty seeder
+  }
+
+  static bool _hasShownQRPromptThisSession = false;
+
+  Future<void> _checkFirstTimeQRGuide() async {
+    if (_hasShownQRPromptThisSession || _isQrAnchored) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    final bool isGuest = user?.isAnonymous ?? false;
+
+    if (isGuest) {
+      if (_currentLocation == null) return;
+      if (!_isPointInCampusPolygon(_currentLocation!)) return;
+    }
+
+    _hasShownQRPromptThisSession = true;
+    if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.qr_code_scanner_rounded, size: 64, color: Color(0xFF6C63FF)),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Welcome to UniMap!',
+                        style: TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'For the most precise positioning before you navigate, please scan a nearby location QR code!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 15,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6C63FF),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                        ),
+                        child: const Text('Got it!', style: TextStyle(fontFamily: 'googlesans', fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.black54),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
   }
 
   Future<void> _loadRecentSearches() async {
@@ -563,6 +646,9 @@ class _HomeScreenState extends State<HomeScreen>
         _indoorPositioningService.updateWithGps(newLocation);
       }
       _showLocationSnackbar('📍 Location updated via GPS.');
+      
+      // Geofence check
+      _checkGuestGeofence();
     } catch (e) {
       setState(() => _isFetchingLocation = false);
       _showLocationSnackbar('⚠️ Could not get GPS location. Try again.');
@@ -780,7 +866,52 @@ class _HomeScreenState extends State<HomeScreen>
                             scannerController.dispose();
                             Navigator.pop(ctx);
 
-                            // 3. QR Code Anchors (Format: UNIMAP_LOC:lat,lng,floor)
+                            // 3. Dynamic QR Code Anchors (Format: UNIMAP_QR:id)
+                            if (rawValue.startsWith("UNIMAP_QR:")) {
+                              final qrId = rawValue.replaceFirst("UNIMAP_QR:", "");
+                              _showLocationSnackbar('⏳ Fetching location details...');
+                              FirebaseFirestore.instance
+                                  .collection('qr_codes')
+                                  .doc(qrId)
+                                  .get()
+                                  .then((doc) {
+                                if (!mounted) return;
+                                if (doc.exists && doc.data() != null) {
+                                  final data = doc.data()!;
+                                  try {
+                                    final lat = (data['lat'] as num).toDouble();
+                                    final lng = (data['lng'] as num).toDouble();
+                                    final int floor = (data['floor'] as num?)?.toInt() ?? _selectedFloor;
+                                    
+                                    final anchorLoc = LatLng(lat, lng);
+                                    setState(() {
+                                      _currentLocation = anchorLoc;
+                                      _selectedFloor = floor;
+                                      _userPhysicalFloor = floor;
+                                      _isQrAnchored = true;
+                                    });
+                                    if (_isIndoorFusionEnabled) {
+                                      _indoorPositioningService.updateWithGps(anchorLoc);
+                                    }
+                                    _mapKey.currentState?.setFloor(floor);
+                                    _mapKey.currentState?.moveToLocation(anchorLoc, zoom: 21.0);
+                                    
+                                    _showLocationSnackbar('📍 Location anchored to precise spot');
+                                  } catch (e) {
+                                    _showLocationSnackbar('⚠️ Invalid location data format in database.');
+                                  }
+                                } else {
+                                  _showLocationSnackbar('⚠️ QR Code not found in database.');
+                                }
+                              }).catchError((error) {
+                                if (!mounted) return;
+                                _showLocationSnackbar('⚠️ Error fetching location. Please check internet.');
+                                debugPrint("Error fetching dynamic QR: $error");
+                              });
+                              return;
+                            }
+
+                            // 4. Static QR Code Anchors (Format: UNIMAP_LOC:lat,lng,floor)
                             if (rawValue.startsWith("UNIMAP_LOC:")) {
                               try {
                                 final parts = rawValue.replaceFirst("UNIMAP_LOC:", "").split(",");
@@ -1012,6 +1143,7 @@ class _HomeScreenState extends State<HomeScreen>
                 heading: _heading,
                 isNavigating: _isNavigating,
                 onRoomSelected: (name, centroid) {
+                  _checkFirstTimeQRGuide();
                   // Find the room to get its floor
                   final room = _allRooms.firstWhereOrNull((r) => r.name == name);
                   setState(() {
@@ -1134,6 +1266,12 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
           
+          // ── 5.5 GUEST BLOCKED OVERLAY ──────────────────────────────────────
+          if (_isGuestBlocked)
+            Positioned.fill(
+              child: _buildGuestBlockedOverlay(),
+            ),
+
           // ── 6. DIRECTIONS BUTTON ───────────────────────────────────────────
           if (!_isSearchFocused && _selectedRoomName != null)
             Positioned(
@@ -1870,10 +2008,44 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildSuggestionChip(String label) {
     return GestureDetector(
       onTap: () {
-        _searchController.text = label;
+        // Hide search overlay and clear focus
+        FocusScope.of(context).unfocus();
         setState(() {
+          _isSearchFocused = false;
           _searchQuery = label;
+          _searchController.text = label;
         });
+
+        // Save to recent searches
+        _saveRecentSearch(label);
+
+        // Tell the map to highlight this type of room
+        final bool hasMatches = _mapKey.currentState?.setHighlight(label) ?? true;
+        if (!hasMatches) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.info_outline_rounded, color: Color(0xFF6C63FF)),
+                  SizedBox(width: 8),
+                  Text('Not Found', style: TextStyle(fontFamily: 'googlesans', fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: Text(
+                'There are no $label on this floor.',
+                style: const TextStyle(fontFamily: 'googlesans', fontSize: 15),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK', style: TextStyle(color: Color(0xFF6C63FF), fontFamily: 'googlesans', fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          );
+        }
       },
       child: Container(
         margin: const EdgeInsets.only(right: 8),
@@ -2112,204 +2284,73 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /*
+  bool _isPointInCampusPolygon(LatLng point) {
+    final List<LatLng> polygon = [
+      const LatLng(26.129478442237748, 91.62074621851825),
+      const LatLng(26.129214548306525, 91.62052824180157),
+      const LatLng(26.12926349954137, 91.62006646474872),
+      const LatLng(26.129362087991154, 91.61947453082043),
+      const LatLng(26.129450433017126, 91.61910061352303),
+      const LatLng(26.129539755861114, 91.61865594713322),
+      const LatLng(26.129575514877217, 91.6186001697514),
+      const LatLng(26.129811402579325, 91.61890885764142),
+      const LatLng(26.129965670025573, 91.61907486973203),
+      const LatLng(26.13005382162376, 91.61916070973427),
+      const LatLng(26.130088212701303, 91.61929506221927),
+      const LatLng(26.130082433522404, 91.61943533450788),
+      const LatLng(26.130146676607925, 91.6194908899106),
+      const LatLng(26.13018425785511, 91.61958583380742),
+      const LatLng(26.130166612698567, 91.61969901904217),
+      const LatLng(26.13012902818572, 91.61979800100573),
+      const LatLng(26.130093784697685, 91.61988645572802),
+      const LatLng(26.130007464022707, 91.62004778943809),
+      const LatLng(26.129958587669208, 91.6201678939534),
+      const LatLng(26.129876659118068, 91.62038983569859),
+      const LatLng(26.129819775062682, 91.62055033451924),
+      const LatLng(26.12974950809844, 91.6207540379922),
+      const LatLng(26.129678723831073, 91.62087509200539),
+    ];
+
+    bool isInside = false;
+    int j = polygon.length - 1;
+    for (int i = 0; i < polygon.length; i++) {
+      if ((polygon[i].longitude > point.longitude) != (polygon[j].longitude > point.longitude) &&
+          point.latitude <
+              (polygon[j].latitude - polygon[i].latitude) *
+                      (point.longitude - polygon[i].longitude) /
+                      (polygon[j].longitude - polygon[i].longitude) +
+                  polygon[i].latitude) {
+        isInside = !isInside;
+      }
+      j = i;
+    }
+    return isInside;
+  }
+
   bool _checkGeofence() {
-    debugPrint("???? [Geofence Check] Geofence disabled. Returning true.");
-    return true;
+    if (_geofenceBypass) return true;
+    if (_currentLocation == null) return false;
+    return _isPointInCampusPolygon(_currentLocation!);
   }
 
-  double _getDistanceToCampus() {
-    if (_currentLocation == null) return 0.0;
-    final campusCenter = const LatLng(26.1297, 91.6197);
-    return const Distance().as(
-      LengthUnit.Meter,
-      _currentLocation!,
-      campusCenter,
-    );
-  }
-
-  void _showGeofenceRestrictionSheet() {
-    _devTapCount = 0; // reset tap count when sheet opens
+  void _checkGuestGeofence() {
+    final user = FirebaseAuth.instance.currentUser;
+    final bool isGuest = user?.isAnonymous ?? false;
     
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            final distance = _getDistanceToCampus();
-            final distanceStr = distance <= 0.0 
-                ? 'acquiring coordinates...' 
-                : distance >= 1000 
-                    ? '${(distance / 1000).toStringAsFixed(2)} km' 
-                    : '${distance.round()} meters';
-                 
-            return Container(
-              padding: const EdgeInsets.all(24),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 20),
-                      width: 40,
-                      height: 4.5,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[300],
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () {
-                      final now = DateTime.now();
-                      if (_lastDevTap == null || now.difference(_lastDevTap!) < const Duration(seconds: 2)) {
-                        _devTapCount++;
-                      } else {
-                        _devTapCount = 1;
-                      }
-                      _lastDevTap = now;
-                      
-                      if (_devTapCount >= 5) {
-                        setState(() {
-                          _geofenceBypass = true;
-                        });
-                        Navigator.pop(context); // close warning sheet
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Developer Mode Activated: Geofence Bypassed!'),
-                            backgroundColor: Color(0xFF6C63FF),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      }
-                    },
-                    child: Container(
-                      width: 72,
-                      height: 72,
-                      decoration: BoxDecoration(
-                        color: Colors.red[50]!,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.gpp_bad_rounded,
-                        color: Colors.redAccent,
-                        size: 40,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                     'Access Restricted',
-                     style: TextStyle(
-                       fontFamily: 'googlesans',
-                       fontSize: 20,
-                       fontWeight: FontWeight.bold,
-                       color: Colors.black87,
-                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                     'To ensure safe and secure access, real-time map directions are restricted to users physically within the Assam Don Bosco University campus.',
-                     textAlign: TextAlign.center,
-                     style: TextStyle(
-                       fontFamily: 'googlesans',
-                       fontSize: 14,
-                       color: Colors.grey[600],
-                       height: 1.4,
-                     ),
-                  ),
-                  const Padding(
-                     padding: EdgeInsets.symmetric(vertical: 16),
-                     child: Divider(color: Colors.black12),
-                  ),
-                  Row(
-                     mainAxisAlignment: MainAxisAlignment.center,
-                     children: [
-                       const Icon(Icons.location_off_rounded, color: Colors.black38, size: 20),
-                       const SizedBox(width: 8),
-                       Text(
-                         'Your location is $distanceStr away.',
-                         style: const TextStyle(
-                           fontFamily: 'googlesans',
-                           fontSize: 14,
-                           fontWeight: FontWeight.bold,
-                           color: Colors.black54,
-                         ),
-                       ),
-                     ],
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                     width: double.infinity,
-                     height: 48,
-                     child: ElevatedButton.icon(
-                       onPressed: () async {
-                         // Refresh location using Geolocator
-                         try {
-                           final position = await Geolocator.getCurrentPosition(
-                             locationSettings: const LocationSettings(
-                               accuracy: LocationAccuracy.high,
-                               timeLimit: Duration(seconds: 6),
-                             ),
-                           );
-                           setState(() {
-                             _currentLocation = LatLng(position.latitude, position.longitude);
-                           });
-                           if (_checkGeofence()) {
-                             Navigator.pop(context); // close warning sheet
-                             ScaffoldMessenger.of(context).showSnackBar(
-                               const SnackBar(
-                                 content: Text('Welcome back to campus! Access granted.'),
-                                 backgroundColor: Colors.green,
-                                 behavior: SnackBarBehavior.floating,
-                               ),
-                             );
-                           } else {
-                             // Update local state inside bottom sheet
-                             setModalState(() {});
-                           }
-                         } catch (e) {
-                           ScaffoldMessenger.of(context).showSnackBar(
-                             const SnackBar(
-                               content: Text('Could not acquire precision GPS coordinates. Try again.'),
-                               backgroundColor: Colors.redAccent,
-                             ),
-                           );
-                         }
-                       },
-                       icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-                       label: const Text(
-                         'Refresh Location',
-                         style: TextStyle(
-                           fontFamily: 'googlesans',
-                           fontWeight: FontWeight.bold,
-                           color: Colors.white,
-                         ),
-                       ),
-                       style: ElevatedButton.styleFrom(
-                         backgroundColor: const Color(0xFF6C63FF),
-                         shape: RoundedRectangleBorder(
-                           borderRadius: BorderRadius.circular(12),
-                         ),
-                         elevation: 0,
-                       ),
-                     ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
+    // Non-guests are never blocked
+    if (!isGuest) {
+      if (mounted) {
+        setState(() => _isGuestBlocked = false);
+      }
+      return;
+    }
+
+    // Guests must pass the geofence check
+    final bool allowed = _checkGeofence();
+    if (mounted) {
+      setState(() => _isGuestBlocked = !allowed);
+    }
   }
-  */
 
   void _showAllStepsBottomSheet() {
     showModalBottomSheet(
@@ -2488,6 +2529,124 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _buildDirectionsPanel() {
     return _isNavigating ? _buildNavigationBar() : _buildRoomDetailSheet();
+  }
+
+  // ── GUEST BLOCKED OVERLAY ─────────────────────────────────────────────────
+  Widget _buildGuestBlockedOverlay() {
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+        child: Container(
+          color: Colors.white.withValues(alpha: 0.75),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              GestureDetector(
+                onTap: () {
+                  final now = DateTime.now();
+                  if (_lastDevTap == null || now.difference(_lastDevTap!) < const Duration(seconds: 2)) {
+                    _devTapCount++;
+                  } else {
+                    _devTapCount = 1;
+                  }
+                  _lastDevTap = now;
+                  
+                  if (_devTapCount >= 5) {
+                    setState(() {
+                      _geofenceBypass = true;
+                      _isGuestBlocked = false;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Developer Mode Activated: Geofence Bypassed!'),
+                        backgroundColor: Color(0xFF6C63FF),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                },
+                child: Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: Colors.red[50],
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.gpp_bad_rounded,
+                    color: Colors.redAccent,
+                    size: 44,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Campus Access Only',
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'As a guest, map navigation is restricted. You must be physically inside the Assam Don Bosco University campus boundary to view the map.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'googlesans',
+                  fontSize: 16,
+                  height: 1.4,
+                  color: Colors.grey[700],
+                ),
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: _fetchAndApplyGpsLocation,
+                  icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+                  label: const Text(
+                    'Refresh Location',
+                    style: TextStyle(
+                      fontFamily: 'googlesans',
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.white,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C63FF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                onPressed: () {
+                  FirebaseAuth.instance.signOut();
+                  Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                },
+                icon: const Icon(Icons.logout_rounded, color: Colors.black54, size: 20),
+                label: const Text(
+                  'Exit Guest Session',
+                  style: TextStyle(
+                    fontFamily: 'googlesans',
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black54,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── COMPACT NAV BAR (shown while route is active) ─────────────────────────
@@ -3901,7 +4060,7 @@ class _AnimatedRotatingBorderState extends State<AnimatedRotatingBorder> with Si
       animation: _controller,
       builder: (context, child) {
         return Container(
-          padding: const EdgeInsets.all(1.0),
+          padding: const EdgeInsets.all(2.0),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(widget.borderRadius),
             gradient: SweepGradient(

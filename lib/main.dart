@@ -115,8 +115,10 @@ import 'upload_rooms.dart'; // Import the upload script
     @override
     void initState() {
       super.initState();
-      _controller = VideoPlayerController.asset('assets/Video/way.mp4')
+      _controller = VideoPlayerController.asset('assets/Video/main.mp4')
         ..initialize().then((_) {
+          _controller.setPlaybackSpeed(0.5); // Reduce playback speed
+          _controller.setVolume(0.0);
           _controller.setLooping(true);
           _controller.play();
           setState(() {});
@@ -137,15 +139,12 @@ import 'upload_rooms.dart'; // Import the upload script
           children: [
             if (_controller.value.isInitialized)
               Positioned.fill(
-                child: Opacity(
-                  opacity: 0.60,
-                  child: FittedBox(
-                    fit: BoxFit.cover,
-                    child: SizedBox(
-                      width: _controller.value.size.width,
-                      height: _controller.value.size.height,
-                      child: VideoPlayer(_controller),
-                    ),
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: _controller.value.size.width,
+                    height: _controller.value.size.height,
+                    child: VideoPlayer(_controller),
                   ),
                 ),
               ),
@@ -176,11 +175,11 @@ import 'upload_rooms.dart'; // Import the upload script
                       children: [
                         TextSpan(
                           text: 'Welcome ',
-                          style: TextStyle(color: Color(0xFFA63C4F)), // Maroon/Red
+                          style: TextStyle(color: Colors.white),
                         ),
                         TextSpan(
                           text: 'to',
-                          style: TextStyle(color: Color(0xFF3C3580)), // Dark Purple
+                          style: TextStyle(color: Colors.white),
                         ),
                       ],
                     ),
@@ -192,7 +191,7 @@ import 'upload_rooms.dart'; // Import the upload script
                   const Text(
                     'UniMap',
                     style: TextStyle(
-                      color: Color(0xFF283A7E), // Dark blue
+                      color: Color(0xFFFFFFFF), // white
                       fontSize: 65,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -1,
@@ -230,13 +229,14 @@ import 'upload_rooms.dart'; // Import the upload script
                     child: const Text(
                       'Continue as Guest',
                       style: TextStyle(
-                        color: Colors.black,
+                        color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
                         decoration: TextDecoration.underline,
                       ),
                     ),
                   ),
+                  const SizedBox(height: 60), // Pushes the content a bit higher
                 ],
               ),
             ),

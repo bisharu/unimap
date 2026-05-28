@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:video_player/video_player.dart';
 import 'profile_screens.dart';
 import 'skeleton.dart';
 
@@ -16,6 +17,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
   Timer? _timer;
+  late VideoPlayerController _videoController;
   String _timeRemaining = "00:00:30";
 
   @override
@@ -23,11 +25,19 @@ class _ProfilePageState extends State<ProfilePage> {
     super.initState();
     _startTimer();
     _fetchUserData();
+    _videoController = VideoPlayerController.asset('assets/Video/profileBack.mp4')
+      ..initialize().then((_) {
+        _videoController.setVolume(0.0);
+        _videoController.setLooping(true);
+        _videoController.play();
+        setState(() {});
+      });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _videoController.dispose();
     super.dispose();
   }
 
@@ -144,25 +154,43 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _buildHeader(BuildContext context, String name, String id, String email, bool isGuest) {
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + 20,
-        bottom: 30,
-        left: 24,
-        right: 24,
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(32),
+        bottomRight: Radius.circular(32),
       ),
-      decoration: const BoxDecoration(
-        color: Color(0xFF1E3A5F),
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(32),
-          bottomRight: Radius.circular(32),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          GestureDetector(
+          Positioned.fill(
+            child: Container(
+              color: const Color(0xFF1E3A5F),
+              child: _videoController.value.isInitialized
+                  ? Opacity(
+                      opacity: 0.75,
+                      child: FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: _videoController.value.size.width,
+                          height: _videoController.value.size.height,
+                          child: VideoPlayer(_videoController),
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 20,
+              bottom: 30,
+              left: 24,
+              right: 24,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GestureDetector(
             onTap: () => Navigator.pop(context),
             child: Container(
               padding: const EdgeInsets.all(8),
@@ -244,6 +272,9 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ],
       ),
+    ),
+  ],
+),
     );
   }
 

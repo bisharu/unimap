@@ -89,7 +89,8 @@ flutter:
 
   assets: 
     - assets/images/adbuLogo.png
-    - assets/Video/way.mp4
+    - assets/Video/main.mp4
+    - assets/Video/profileBack.mp4
     - assets/images/unimapLogo.png
     - assets/images/unimapIcon.png
     - assets/images/aiButton.png
