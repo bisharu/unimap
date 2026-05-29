@@ -4,8 +4,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'dart:convert';
 import 'package:flutter/services.dart';
-import '../utils/dijkstra_router.dart';
+import '../utils/astar_router.dart';
 import '../models.dart';
+import '../services/navigation_service.dart';
 
 // Floor identifiers: 0 = Ground, 1 = Floor 1, 2 = Floor 2, 3 = Floor 3, 4 = Floor 4
 class IndoorMapWidget extends StatefulWidget {
@@ -17,6 +18,10 @@ class IndoorMapWidget extends StatefulWidget {
   final String? highlightType;
   final bool isNavigating;
 
+  /// Optional NavigationService. When provided the map renders the
+  /// step-based blue dot and split (traveled / remaining) polylines.
+  final NavigationService? navigationService;
+
   const IndoorMapWidget({
     super.key,
     this.currentFloor = 0,
@@ -26,6 +31,7 @@ class IndoorMapWidget extends StatefulWidget {
     this.onRouteCalculated,
     this.highlightType,
     this.isNavigating = false,
+    this.navigationService,
   });
 
   @override
@@ -54,7 +60,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   static const LatLng _buildingCenter = LatLng(26.1297, 91.6197);
 
   // Router for pathfinding
-  final DijkstraRouter _router = DijkstraRouter();
+  final AStarRouter _router = AStarRouter();
   List<NavPoint>? _currentFullRoute;
 
   @override
@@ -373,8 +379,17 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
         }
 
         if (hasName && (showLabels || isSelected) && (!isFiltering || typeMatches || isSelected)) {
+          LatLng markerPos = featureCentroid;
+          if (properties['labelLat'] != null && properties['labelLng'] != null) {
+            final double? mLat = double.tryParse(properties['labelLat'].toString());
+            final double? mLng = double.tryParse(properties['labelLng'].toString());
+            if (mLat != null && mLng != null) {
+              markerPos = LatLng(mLat, mLng);
+            }
+          }
+
           potentialMarkers.add({
-            'point': featureCentroid, // reuse already-computed centroid
+            'point': markerPos, // use custom pos if available, else centroid
             'name': displayName,
             'roomNo': roomNo,
             'type': type,
@@ -803,7 +818,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     final start = NavPoint(
       latitude: widget.userLocation!.latitude,
       longitude: widget.userLocation!.longitude,
-      floor: widget.currentFloor,
+      floor: _selectedFloor,
     );
     
     final end = NavPoint(
@@ -1140,7 +1155,70 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             // Indoor room polygons from GeoJSON
             PolygonLayer(polygons: _roomPolygons),
             PolylineLayer(polylines: _borderPolylines),
-            PolylineLayer(polylines: _routePolylines),
+
+            // ── Route polylines ─────────────────────────────────────────────
+            // When NavigationService is active, render split (traveled+remaining)
+            // polylines and animated blue dot. Otherwise fall back to the
+            // traditional full-route polylines.
+            if (widget.navigationService != null)
+              ValueListenableBuilder<NavigationState?>(
+                valueListenable: widget.navigationService!.state,
+                builder: (_, navState, __) {
+                  if (navState == null) {
+                    return PolylineLayer(polylines: _routePolylines);
+                  }
+                  return Stack(
+                    children: [
+                      // Traveled portion — grey
+                      if (navState.traveledPolyline.length >= 2)
+                        PolylineLayer(polylines: [
+                          Polyline(
+                            points: navState.traveledPolyline,
+                            strokeWidth: 4.5,
+                            color: Colors.grey.shade400,
+                            strokeCap: StrokeCap.round,
+                            strokeJoin: StrokeJoin.round,
+                          ),
+                        ]),
+                      // Remaining portion — blue (with glow)
+                      if (navState.remainingPolyline.length >= 2)
+                        PolylineLayer(polylines: [
+                          Polyline(
+                            points: navState.remainingPolyline,
+                            strokeWidth: 9.0,
+                            color: const Color(0xFF5B5FEF).withValues(alpha: 0.25),
+                            strokeCap: StrokeCap.round,
+                            strokeJoin: StrokeJoin.round,
+                          ),
+                          Polyline(
+                            points: navState.remainingPolyline,
+                            strokeWidth: 4.5,
+                            color: const Color(0xFF5B5FEF),
+                            strokeCap: StrokeCap.round,
+                            strokeJoin: StrokeJoin.round,
+                          ),
+                        ]),
+                      // Animated Blue Dot
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: navState.currentPosition,
+                            width: 56,
+                            height: 56,
+                            rotate: true,
+                            child: _BlueDotMarker(
+                              heading: widget.heading,
+                              hasArrived: navState.hasArrived,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              )
+            else
+              PolylineLayer(polylines: _routePolylines),
 
             // 🏫 University Annotation (pointing to the building)
             if (_currentZoom <= 19.0)
@@ -1180,7 +1258,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
               ),
             
             // User Location Marker (Google Maps style)
-            if (widget.userLocation != null)
+            if (widget.userLocation != null && !widget.isNavigating)
               MarkerLayer(
                 markers: [
                   Marker(
@@ -1278,50 +1356,32 @@ class _UserLocationMarkerState extends State<UserLocationMarker>
             },
           ),
 
-          if (widget.isNavigating)
-            // Navigation mode: rotating caret ^ arrow
-            Transform.rotate(
-              angle: headingRad,
-              child: const Icon(
-                Icons.navigation_rounded,
-                color: Color(0xFF4285F4),
-                size: 32,
-                shadows: [
-                  Shadow(
-                    color: Colors.white,
-                    blurRadius: 6,
-                  ),
-                ],
-              ),
-            )
-          else ...[
-            // Default mode: static accuracy ring + blue dot
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF4285F4).withValues(alpha: 0.15),
-              ),
+          // Always show static accuracy ring + blue dot
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF4285F4).withValues(alpha: 0.15),
             ),
-            // Center blue dot with white border
-            Container(
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                color: const Color(0xFF4285F4),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF4285F4).withValues(alpha: 0.4),
-                    blurRadius: 6,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
+          ),
+          // Center blue dot with white border
+          Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: const Color(0xFF4285F4),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2.5),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF4285F4).withValues(alpha: 0.4),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -1359,4 +1419,93 @@ class _HeadingArrowPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BLUE DOT MARKER — route-snapped step-navigation dot
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _BlueDotMarker extends StatefulWidget {
+  final double heading;
+  final bool hasArrived;
+
+  const _BlueDotMarker({required this.heading, this.hasArrived = false});
+
+  @override
+  State<_BlueDotMarker> createState() => _BlueDotMarkerState();
+}
+
+class _BlueDotMarkerState extends State<_BlueDotMarker>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
+    _pulseAnimation =
+        Tween<double>(begin: 0.55, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulseAnimation,
+      builder: (_, __) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            // Confidence circle (pulsing semi-transparent halo)
+            Container(
+              width: 54 * _pulseAnimation.value,
+              height: 54 * _pulseAnimation.value,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF5B5FEF).withValues(alpha: 0.15),
+                border: Border.all(
+                  color: const Color(0xFF5B5FEF).withValues(alpha: 0.30),
+                  width: 1,
+                ),
+              ),
+            ),
+            // White ring
+            Container(
+              width: 20,
+              height: 20,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(color: Colors.black26, blurRadius: 6, spreadRadius: 1),
+                ],
+              ),
+            ),
+            // Blue core
+            Container(
+              width: widget.hasArrived ? 14 : 13,
+              height: widget.hasArrived ? 14 : 13,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: widget.hasArrived
+                    ? const Color(0xFF00C853)
+                    : const Color(0xFF5B5FEF),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

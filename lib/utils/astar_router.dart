@@ -1,9 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// DIJKSTRA ROUTER  –  multi-floor indoor navigation
+// A* ROUTER  –  multi-floor indoor navigation
 // ─────────────────────────────────────────────────────────────────────────────
 // Builds a weighted undirected graph from per-floor path/corridor LineStrings
 // and connects floors through staircase / lift transition points.
-// Pathfinding uses Dijkstra's algorithm (no heuristic, optimal shortest path).
+// Pathfinding uses A* algorithm.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:latlong2/latlong.dart';
@@ -34,7 +34,7 @@ class PathNode {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-class DijkstraRouter {
+class AStarRouter {
   /// All nodes in the global graph (all floors combined).
   final List<PathNode> nodes = [];
 
@@ -76,6 +76,32 @@ class DijkstraRouter {
             node.neighbors[prev] = d;
           }
           prev = node;
+        }
+      }
+    });
+
+    // Step 1.5 - Bridge gaps between different path segments on the same floor
+    // This fixes disconnected graphs caused by slight gaps in GeoJSON LineStrings.
+    final Map<int, List<PathNode>> nodesByFloor = {};
+    for (final node in nodes) {
+      nodesByFloor.putIfAbsent(node.navPoint.floor, () => []).add(node);
+    }
+    
+    nodesByFloor.forEach((floor, floorNodes) {
+      for (int i = 0; i < floorNodes.length; i++) {
+        final a = floorNodes[i];
+        for (int j = i + 1; j < floorNodes.length; j++) {
+          final b = floorNodes[j];
+          if (!a.neighbors.containsKey(b)) {
+            final d = _metersBetween(
+              LatLng(a.navPoint.latitude, a.navPoint.longitude),
+              LatLng(b.navPoint.latitude, b.navPoint.longitude),
+            );
+            if (d < 1.5) { // Snapping threshold: 1.5 meters
+              a.neighbors[b] = d;
+              b.neighbors[a] = d;
+            }
+          }
         }
       }
     });
@@ -154,29 +180,40 @@ class DijkstraRouter {
     }
   }
 
-  // ── Dijkstra pathfinding ──────────────────────────────────────────────────
+  // ── A* pathfinding ─────────────────────────────────────────────────────────
 
   /// Returns the shortest path from [start] to [end] as an ordered list of
   /// [NavPoint]s, or `null` if no path exists.
   List<NavPoint>? findPath(NavPoint start, NavPoint end, {bool accessibleRoute = false}) {
     if (nodes.isEmpty) return null;
 
-    final startNode = _nearestOnFloor(
-        LatLng(start.latitude, start.longitude), start.floor);
-    final endNode = _nearestOnFloor(
-        LatLng(end.latitude, end.longitude), end.floor);
+    var startNode = _nearestOnFloor(
+        LatLng(start.latitude, start.longitude), start.floor, excludeTransitions: true);
+    if (startNode == null) {
+      startNode = _nearestOnFloor(LatLng(start.latitude, start.longitude), start.floor);
+    }
+        
+    var endNode = _nearestOnFloor(
+        LatLng(end.latitude, end.longitude), end.floor, excludeTransitions: true);
+    if (endNode == null) {
+      endNode = _nearestOnFloor(LatLng(end.latitude, end.longitude), end.floor);
+    }
 
     if (startNode == null || endNode == null) return null;
     if (startNode == endNode) return [startNode.navPoint];
 
-    // dist[node] = shortest known distance from startNode
-    final Map<PathNode, double> dist = {for (final n in nodes) n: double.infinity};
+    // gScore[node] = cost from startNode
+    final Map<PathNode, double> gScore = {for (final n in nodes) n: double.infinity};
+    // fScore[node] = gScore[node] + heuristic(node, endNode)
+    final Map<PathNode, double> fScore = {for (final n in nodes) n: double.infinity};
+    
     final Map<PathNode, PathNode?> prev = {};
 
-    dist[startNode] = 0.0;
+    gScore[startNode] = 0.0;
+    fScore[startNode] = _heuristic(startNode, endNode);
 
-    // Min-heap keyed on current best distance
-    final pq = PriorityQueue<PathNode>((a, b) => dist[a]!.compareTo(dist[b]!));
+    // Min-heap keyed on current best fScore
+    final pq = PriorityQueue<PathNode>((a, b) => fScore[a]!.compareTo(fScore[b]!));
     pq.add(startNode);
 
     while (pq.isNotEmpty) {
@@ -185,7 +222,7 @@ class DijkstraRouter {
       // Early exit once we pop the destination
       if (u == endNode) break;
 
-      final du = dist[u]!;
+      final currentGScore = gScore[u]!;
 
       for (final entry in u.neighbors.entries) {
         final v = entry.key;
@@ -197,11 +234,13 @@ class DijkstraRouter {
           adjustedW += 10000.0;
         }
         
-        final alt = du + adjustedW;
+        final tentativeGScore = currentGScore + adjustedW;
 
-        if (alt < dist[v]!) {
-          dist[v] = alt;
+        if (tentativeGScore < gScore[v]!) {
           prev[v] = u;
+          gScore[v] = tentativeGScore;
+          fScore[v] = tentativeGScore + _heuristic(v, endNode);
+          
           // Re-insert with updated priority (Dart PriorityQueue doesn't
           // support decrease-key, so we remove+re-add).
           pq.remove(v);
@@ -211,7 +250,7 @@ class DijkstraRouter {
     }
 
     // Reconstruct path
-    if (dist[endNode] == double.infinity) return null; // unreachable
+    if (gScore[endNode] == double.infinity) return null; // unreachable
 
     final path = <NavPoint>[];
     PathNode? cur = endNode;
@@ -224,18 +263,28 @@ class DijkstraRouter {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
+  double _heuristic(PathNode a, PathNode b) {
+    double h = _metersBetween(
+        LatLng(a.navPoint.latitude, a.navPoint.longitude),
+        LatLng(b.navPoint.latitude, b.navPoint.longitude));
+    h += (a.navPoint.floor - b.navPoint.floor).abs() * 10.0;
+    return h;
+  }
+
   /// Euclidean distance in metres between two lat/lng points.
   double _metersBetween(LatLng a, LatLng b) =>
       const Distance().as(LengthUnit.Meter, a, b);
 
   /// Nearest graph node on [floor] to [point], ignoring nodes from other floors.
   /// Returns `null` if no nodes exist on that floor.
-  PathNode? _nearestOnFloor(LatLng point, int floor) {
+  PathNode? _nearestOnFloor(LatLng point, int floor, {bool excludeTransitions = false}) {
     PathNode? nearest;
     double minDist = double.infinity;
 
     for (final node in nodes) {
       if (node.navPoint.floor != floor) continue;
+      if (excludeTransitions && (node.isStair || node.isLift)) continue;
+
       final d = _metersBetween(
           point, LatLng(node.navPoint.latitude, node.navPoint.longitude));
       if (d < minDist) {
@@ -246,5 +295,3 @@ class DijkstraRouter {
     return nearest;
   }
 }
-
-

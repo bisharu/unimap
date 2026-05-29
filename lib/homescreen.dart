@@ -18,6 +18,7 @@ import 'filter_screen.dart';
 import 'dart:ui' as ui;
 import 'utils/directions_helper.dart';
 import 'utils/indoor_positioning_service.dart';
+import 'services/navigation_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 // import 'ai_assistant_screen.dart';
 import 'package:geolocator/geolocator.dart';
@@ -89,6 +90,7 @@ class _HomeScreenState extends State<HomeScreen>
   LatLng? _selectedRoomCentroid;
   int? _selectedRoomFloor;
   bool _isNavigating = false; // Tracks whether map routing is currently active
+  final NavigationService _navigationService = NavigationService();
 
   @override
   void initState() {
@@ -896,6 +898,18 @@ class _HomeScreenState extends State<HomeScreen>
                                     _mapKey.currentState?.setFloor(floor);
                                     _mapKey.currentState?.moveToLocation(anchorLoc, zoom: 21.0);
                                     
+                                    // Snap blue dot to new QR position
+                                    _navigationService.applyQrAnchor(anchorLoc);
+
+                                    if (_isNavigating && _selectedRoomCentroid != null) {
+                                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                                        _mapKey.currentState?.showDirectionsTo(
+                                          _selectedRoomCentroid!,
+                                          destinationFloor: _selectedRoomFloor,
+                                        );
+                                      });
+                                    }
+                                    
                                     _showLocationSnackbar('📍 Location anchored to precise spot');
                                   } catch (e) {
                                     _showLocationSnackbar('⚠️ Invalid location data format in database.');
@@ -932,6 +946,18 @@ class _HomeScreenState extends State<HomeScreen>
                                   }
                                   _mapKey.currentState?.setFloor(floor);
                                   _mapKey.currentState?.moveToLocation(anchorLoc, zoom: 21.0);
+                                  
+                                  // Snap blue dot to new QR position
+                                  _navigationService.applyQrAnchor(anchorLoc);
+
+                                  if (_isNavigating && _selectedRoomCentroid != null) {
+                                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                                      _mapKey.currentState?.showDirectionsTo(
+                                        _selectedRoomCentroid!,
+                                        destinationFloor: _selectedRoomFloor,
+                                      );
+                                    });
+                                  }
                                   
                                   _showLocationSnackbar('📍 Location anchored to precise spot');
                                   return;
@@ -1138,7 +1164,7 @@ class _HomeScreenState extends State<HomeScreen>
               behavior: HitTestBehavior.translucent,
               child: IndoorMapWidget(
                 key: _mapKey,
-                currentFloor: 0,
+                currentFloor: _userPhysicalFloor ?? 0,
                 userLocation: _currentLocation,
                 heading: _heading,
                 isNavigating: _isNavigating,
@@ -1159,7 +1185,18 @@ class _HomeScreenState extends State<HomeScreen>
                   setState(() {
                     _directionSteps = DirectionsHelper.generateDirections(path, nodes);
                   });
+                  // Start step-based blue dot navigation
+                  if (_currentLocation != null) {
+                    final flatRoute = path
+                        .where((p) => p.floor == (_userPhysicalFloor ?? 0))
+                        .map((p) => LatLng(p.latitude, p.longitude))
+                        .toList();
+                    if (flatRoute.length >= 2) {
+                      _navigationService.startNavigation(flatRoute, _currentLocation!);
+                    }
+                  }
                 },
+                navigationService: _navigationService,
               ),
             ),
           ),
@@ -1197,13 +1234,6 @@ class _HomeScreenState extends State<HomeScreen>
               child: _buildCompass(),
             ),
 
-          // ── 3.6. INDOOR FUSION BUTTON (above compass)
-          if (!_isSearchFocused)
-            Positioned(
-              bottom: MediaQuery.of(context).size.height * 0.60 + 64,
-              right: 16,
-              child: _buildIndoorFusionButton(),
-            ),
 
           // ── 4. LOCATION BUTTON (bottom right) ──────────────────────────────
           if (!_isSearchFocused)
@@ -2528,7 +2558,60 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildDirectionsPanel() {
-    return _isNavigating ? _buildNavigationBar() : _buildRoomDetailSheet();
+    if (_isNavigating) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Recenter button — only when navigating
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16, bottom: 10),
+              child: ValueListenableBuilder<NavigationState?>(
+                valueListenable: _navigationService.state,
+                builder: (_, navState, __) {
+                  // Show arrival snackbar when arrived
+                  if (navState?.hasArrived == true) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted && _isNavigating) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Row(
+                              children: [
+                                Icon(Icons.check_circle_rounded, color: Colors.white),
+                                SizedBox(width: 10),
+                                Text('You have arrived! 🎉',
+                                    style: TextStyle(fontFamily: 'googlesans', fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                            backgroundColor: const Color(0xFF00C853),
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            margin: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+                            duration: const Duration(seconds: 4),
+                          ),
+                        );
+                      }
+                    });
+                  }
+                  return FloatingActionButton.small(
+                    heroTag: 'recenter_btn',
+                    onPressed: _navigationService.recenter,
+                    backgroundColor: Colors.white,
+                    elevation: 3,
+                    shape: const CircleBorder(),
+                    child: const Icon(Icons.my_location_rounded,
+                        color: Color(0xFF5B5FEF), size: 22),
+                  );
+                },
+              ),
+            ),
+          ),
+          _buildNavigationBar(),
+        ],
+      );
+    }
+    return _buildRoomDetailSheet();
   }
 
   // ── GUEST BLOCKED OVERLAY ─────────────────────────────────────────────────
@@ -2762,6 +2845,7 @@ class _HomeScreenState extends State<HomeScreen>
                   _isNavigating = false;
                   _directionSteps = [];
                 });
+                _navigationService.stopNavigation();
                 _mapKey.currentState?.setRoute(null);
               },
               style: ElevatedButton.styleFrom(
@@ -3726,11 +3810,18 @@ Widget _buildSearchBar(BuildContext context) {
     const distanceCalculator = Distance();
 
     for (var room in _allRooms) {
-      if (room.floor == _userPhysicalFloor && room.type.toLowerCase() == type) {
-        double dist = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, room.centroid);
-        if (dist < minDistance) {
-          minDistance = dist;
-          nearestFacility = room;
+      if (room.floor == _userPhysicalFloor) {
+        final rType = room.type.toLowerCase();
+        bool isMatch = false;
+        if (type == 'lift' && (rType == 'lift' || rType == 'elevator')) isMatch = true;
+        if (type == 'staircase' && (rType == 'staircase' || rType == 'stairs')) isMatch = true;
+        
+        if (isMatch) {
+          double dist = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, room.centroid);
+          if (dist < minDistance) {
+            minDistance = dist;
+            nearestFacility = room;
+          }
         }
       }
     }

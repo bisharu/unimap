@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../models.dart';
-import 'dijkstra_router.dart';
+import 'astar_router.dart';
 
 class DirectionStep {
   final String instruction;
