@@ -2903,15 +2903,25 @@ class _HomeScreenState extends State<HomeScreen>
           final isCabin = rType.toLowerCase() == 'cabin';
           final parts = description.split('|');
           final isFacultyProfile = isCabin && parts.length >= 4;
-          final floorLabel = _selectedRoomFloor == null
-              ? 'Assam Don Bosco University'
-              : 'Room no. ${rNo > 0 ? rNo : "-"}, Floor - ${_selectedRoomFloor == 0 ? "G" : _selectedRoomFloor}';
+
+          final floorName = _selectedRoomFloor == null
+              ? 'Unknown'
+              : _selectedRoomFloor == 0
+                  ? 'Ground'
+                  : _selectedRoomFloor == 1
+                      ? '1st Floor'
+                      : _selectedRoomFloor == 2
+                          ? '2nd Floor'
+                          : _selectedRoomFloor == 3
+                              ? '3rd Floor'
+                              : 'Floor $_selectedRoomFloor';
 
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Drag Handle
               Container(
-                margin: const EdgeInsets.only(top: 10, bottom: 4),
+                margin: const EdgeInsets.only(top: 10, bottom: 8),
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
@@ -2919,57 +2929,38 @@ class _HomeScreenState extends State<HomeScreen>
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
+
+              // Title Section
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+                padding: const EdgeInsets.fromLTRB(20, 4, 16, 4),
                 child: Row(
                   children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF3B5BDB),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.location_on_rounded, color: Colors.white, size: 22),
+                    // Location Pin Icon (no blue circle container, as in mockup)
+                    const Icon(
+                      Icons.location_on_rounded,
+                      color: Color(0xFF2563EB),
+                      size: 32,
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
+                    
+                    // Location Name Text (vibrant blue color, bold)
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _selectedRoomName ?? '',
-                            style: const TextStyle(
-                              fontFamily: 'googlesans',
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            floorLabel,
-                            style: const TextStyle(
-                              fontFamily: 'googlesans',
-                              fontSize: 12,
-                              color: Colors.black45,
-                            ),
-                          ),
-                        ],
+                      child: Text(
+                        _selectedRoomName ?? '',
+                        style: const TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2563EB),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    IconButton(
-                      icon: Container(
-                        width: 30,
-                        height: 30,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[100],
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.close_rounded, color: Colors.black54, size: 17),
-                      ),
-                      onPressed: () {
+                    
+                    // Styled X Close Button
+                    GestureDetector(
+                      onTap: () {
                         setState(() {
                           _selectedRoomName = null;
                           _selectedRoomCentroid = null;
@@ -2979,78 +2970,134 @@ class _HomeScreenState extends State<HomeScreen>
                         });
                         _mapKey.currentState?.setRoute(null);
                       },
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: const Color(0xFFFCA5A5),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.close_rounded,
+                          color: Color(0xFFEF4444),
+                          size: 18,
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
+
+              const SizedBox(height: 12),
+
+              // Room Details & Go Now Row
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Room Details Column
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Room no. ${rNo > 0 ? rNo : "-"}',
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF0F766E),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Floor : $floorName',
+                          style: const TextStyle(
+                            fontFamily: 'googlesans',
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF0F766E),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    // "Go Now" Gradient Button
+                    GestureDetector(
+                      onTap: () {
+                        _startNavigation(enableCompass: true);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                          ),
+                          borderRadius: BorderRadius.circular(28),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF3B82F6).withValues(alpha: 0.35),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Navigation arrow rotated to point northeast (top-right)
+                            Transform.rotate(
+                              angle: 0.785398, // 45 degrees in radians to point northeast
+                              child: const Icon(
+                                Icons.navigation_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Go Now',
+                              style: TextStyle(
+                                fontFamily: 'googlesans',
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+              
+              // Divider
               const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: EdgeInsets.symmetric(horizontal: 20),
                 child: Divider(height: 1, color: Colors.black12),
               ),
+
+              const SizedBox(height: 16),
+
+              // Image Section
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          _startNavigation(enableCompass: false);
-                        },
-                        icon: const Icon(Icons.directions_rounded, color: Colors.white, size: 18),
-                        label: const Text(
-                          'Directions',
-                          style: TextStyle(
-                            fontFamily: 'googlesans',
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF3B5BDB),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          elevation: 0,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          _startNavigation(enableCompass: true);
-                        },
-                        icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 18),
-                        label: const Text(
-                          'Start',
-                          style: TextStyle(
-                            fontFamily: 'googlesans',
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF3B5BDB),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          elevation: 0,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
                   child: Container(
                     height: 130,
                     width: double.infinity,
                     decoration: BoxDecoration(
-                      color: isFacultyProfile ? const Color(0xFF3B5BDB) : const Color(0xFFBDD7FF),
+                      color: const Color(0xFFE5E7EB), // Sleek grey matching mockup
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: isFacultyProfile
@@ -3059,15 +3106,25 @@ class _HomeScreenState extends State<HomeScreen>
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.image_outlined, color: Colors.blue[300], size: 36),
+                                Icon(Icons.image_outlined, color: Colors.grey[400], size: 36),
                                 const SizedBox(height: 6),
+                                Text(
+                                  'IMAGE',
+                                  style: TextStyle(
+                                    fontFamily: 'googlesans',
+                                    color: Colors.grey[500],
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.2,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
                                 Text(
                                   _selectedRoomName ?? '',
                                   style: TextStyle(
                                     fontFamily: 'googlesans',
-                                    color: Colors.blue[400],
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey[600],
+                                    fontSize: 12,
                                   ),
                                 ),
                               ],
@@ -3076,34 +3133,47 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
+
+              const SizedBox(height: 12),
+
+              // Description Section
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
+                    color: const Color(0xFFF3F4F6), // Matches description block background
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.description_outlined, color: Colors.grey[500], size: 22),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          (description.isNotEmpty && !isFacultyProfile)
-                              ? description
-                              : isFacultyProfile && parts.length > 2
-                                  ? '${parts[1]}, ${parts[2]}'
-                                  : 'No description available.',
-                          style: TextStyle(
-                            fontFamily: 'googlesans',
-                            fontSize: 13,
-                            color: Colors.grey[600],
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                      Text(
+                        'Description',
+                        style: TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[500],
+                          letterSpacing: 1.1,
                         ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        (description.isNotEmpty && !isFacultyProfile)
+                            ? description
+                            : isFacultyProfile && parts.length > 2
+                                ? '${parts[1]}, ${parts[2]}'
+                                : 'No description available.',
+                        style: TextStyle(
+                          fontFamily: 'googlesans',
+                          fontSize: 13.5,
+                          color: Colors.grey[700],
+                          height: 1.4,
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
