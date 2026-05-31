@@ -52,24 +52,32 @@ class _LoginState extends State<Login> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. Look up the email associated with this Student ID in Firestore
-      final userQuery = await FirebaseFirestore.instance
-          .collection('users')
-          .where('studentId', isEqualTo: id)
-          .limit(1)
-          .get();
-
-      if (userQuery.docs.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No account found for this ID')),
-          );
-          setState(() => _isLoading = false);
-        }
-        return;
+      // If the caller is not authenticated, temporarily sign in anonymously to satisfy Firestore security rules
+      bool wasTempAnonymous = false;
+      if (FirebaseAuth.instance.currentUser == null) {
+        await FirebaseAuth.instance.signInAnonymously();
+        wasTempAnonymous = true;
       }
 
-      final realEmail = userQuery.docs.first.data()['email'];
+      String? realEmail;
+
+      try {
+        // 1. Look up the email associated with this Student ID in Firestore
+        final userQuery = await FirebaseFirestore.instance
+            .collection('users')
+            .where('studentId', isEqualTo: id)
+            .limit(1)
+            .get();
+
+        if (userQuery.docs.isNotEmpty) {
+          realEmail = userQuery.docs.first.data()['email'];
+        }
+      } catch (firestoreError) {
+        debugPrint("Firestore query failed: $firestoreError");
+      }
+
+      // Fallback to the local student email pattern if Firestore is inaccessible or lookup is empty
+      realEmail ??= '${id.toLowerCase()}@unimap.local';
 
       // 2. Sign in with the real email
       await FirebaseAuth.instance.signInWithEmailAndPassword(
@@ -77,7 +85,7 @@ class _LoginState extends State<Login> {
         password: password,
       );
 
-            if (mounted) {
+      if (mounted) {
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
@@ -85,6 +93,9 @@ class _LoginState extends State<Login> {
         );
       }
     } on FirebaseAuthException catch (e) {
+      if (FirebaseAuth.instance.currentUser?.isAnonymous == true) {
+        await FirebaseAuth.instance.signOut();
+      }
       String message = 'Invalid ID or password';
       if (e.code == 'user-not-found') {
         message = 'No account found for this ID';
@@ -96,6 +107,9 @@ class _LoginState extends State<Login> {
         SnackBar(content: Text(message)),
       );
     } catch (e) {
+      if (FirebaseAuth.instance.currentUser?.isAnonymous == true) {
+        await FirebaseAuth.instance.signOut();
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: ${e.toString()}')),

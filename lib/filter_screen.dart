@@ -61,7 +61,6 @@ const Map<int, List<Map<String, String>>> _kFloorRoomTypes = {
 // Refreshment area items
 const List<Map<String, String>> _kRefreshmentTypes = [
   {'label': 'Cafeteria',     'type': 'cafeteria'},
-  {'label': 'Coffee Lounge', 'type': 'coffee lounge'},
 ];
 
 // ─── Colours (matching the beige palette in the designs) ─────────────────────

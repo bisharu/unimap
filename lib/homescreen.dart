@@ -16,12 +16,13 @@ import 'profile_page.dart';
 import 'skeleton.dart';
 import 'filter_screen.dart';
 import 'dart:ui' as ui;
+import 'utils.dart';
 import 'utils/directions_helper.dart';
 import 'utils/indoor_positioning_service.dart';
 import 'services/navigation_service.dart';
-import 'package:url_launcher/url_launcher.dart';
-// import 'ai_assistant_screen.dart';
+// AI chatbot import removed
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -70,6 +71,8 @@ class _HomeScreenState extends State<HomeScreen>
   int _currentPlaceholderIndex = 0;
   double _placeholderOpacity = 1.0;
   Timer? _placeholderTimer;
+  Timer? _guestSessionTimer;
+  String? _remainingGuestTime;
 
   // Compass and Connectivity
   double _heading = 0;
@@ -83,18 +86,40 @@ class _HomeScreenState extends State<HomeScreen>
   bool _geofenceBypass = false;
   int _devTapCount = 0;
   DateTime? _lastDevTap;
-  bool _isGuestBlocked = true; // Block guests by default until GPS confirms they are inside
+  bool _isGuestBlocked = false; // Set to false by default, dynamically initialized in initState
+  
+  // Faculty cabins data loaded once at startup to prevent infinite nested build loops
+  String _cabin1 = 'Loading...';
+  String _cabin2 = 'Loading...';
+  String _cabin3 = 'Loading...';
+  String _availabilityHours = 'Loading...';
+
   StreamSubscription? _connectivitySubscription;
   StreamSubscription? _compassSubscription;
   String? _selectedRoomName;
+  String? _selectedRoomNo; // raw roomNo from GeoJSON (e.g. "006 ")
   LatLng? _selectedRoomCentroid;
   int? _selectedRoomFloor;
   bool _isNavigating = false; // Tracks whether map routing is currently active
+  bool _hasShownArrivalSnackBar = false; // Tracks whether arrival SnackBar has been shown
   final NavigationService _navigationService = NavigationService();
 
   @override
   void initState() {
     super.initState();
+    
+    // Determine guest state immediately to prevent "Campus Access Only" screen flash for logged-in users
+    final user = FirebaseAuth.instance.currentUser;
+    final bool isGuest = user?.isAnonymous ?? false;
+    _isGuestBlocked = isGuest;
+    
+    if (isGuest && user != null) {
+      _startGuestSessionTimer(user);
+    }
+    
+    // Fetch campus cabin statuses once at startup
+    _fetchCampusCabinData();
+
     _searchFocusNode.addListener(() {
       final hasFocus = _searchFocusNode.hasFocus;
       if (mounted) {
@@ -149,6 +174,7 @@ class _HomeScreenState extends State<HomeScreen>
   static bool _hasShownQRPromptThisSession = false;
 
   Future<void> _checkFirstTimeQRGuide() async {
+    if (_isOffline) return;
     if (_hasShownQRPromptThisSession || _isQrAnchored) return;
 
     final user = FirebaseAuth.instance.currentUser;
@@ -186,8 +212,23 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
                       const SizedBox(height: 12),
-                      const Text(
-                        'For the most precise positioning before you navigate, please scan a nearby location QR code!',
+                      const Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: 'For the most precise positioning before you navigate, please scan a nearby location QR code!.\n \n ',
+                            ),
+                            TextSpan(
+                              text: 'Note: ',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold, // Bolds only this section
+                              ),
+                            ),
+                            TextSpan(
+                              text: 'Please look for QR codes positioned near staircase entrances, elevator areas, and official notice board displays.',
+                            ),
+                          ],
+                        ),
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontFamily: 'googlesans',
@@ -299,6 +340,28 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  Future<void> _fetchCampusCabinData() async {
+    try {
+      final campusQuery = await FirebaseFirestore.instance.collection('Azara_Campus').get();
+      for (var doc in campusQuery.docs) {
+        final data = doc.data();
+        if (data.containsKey('cabin 1') || data.containsKey('availabilityHours') || data.containsKey('cabin 2') || data.containsKey('cabin 3')) {
+          if (mounted) {
+            setState(() {
+              _cabin1 = data['cabin 1']?.toString() ?? 'Not Available';
+              _cabin2 = data['cabin 2']?.toString() ?? 'Not Available';
+              _cabin3 = data['cabin 3']?.toString() ?? 'Not Available';
+              _availabilityHours = data['availabilityHours']?.toString() ?? 'Not Available';
+            });
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching campus cabin data: $e");
+    }
+  }
+
   Future<void> _loadAllRoomsData() async {
     final List<RoomSearchItem> loadedRooms = [];
     final floors = {0: 'ground', 1: 'floor_1', 2: 'floor_2', 3: 'floor_3', 4: 'floor_4'};
@@ -330,7 +393,7 @@ class _HomeScreenState extends State<HomeScreen>
 
           final String rawName = (properties['name'] ?? '').toString();
           final String roomNo = (properties['roomNo'] ?? '').toString().trim();
-          final String name = rawName.isNotEmpty && rawName != 'null' ? rawName : roomNo;
+          final String name = rawName.isNotEmpty && rawName != 'null' ? UniUtils.toTitleCase(rawName) : roomNo;
           final String type = (properties['type'] ?? 'other').toString().toLowerCase();
 
           if (points.isNotEmpty && name.isNotEmpty && name != "null") {
@@ -375,6 +438,32 @@ class _HomeScreenState extends State<HomeScreen>
         : "U";
   }
 
+  void _startGuestSessionTimer(User user) {
+    _guestSessionTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final lastSignIn = user.metadata.lastSignInTime;
+      if (lastSignIn != null) {
+        final expiryTime = lastSignIn.add(const Duration(hours: 1));
+        final now = DateTime.now();
+        if (now.isAfter(expiryTime)) {
+          timer.cancel();
+          FirebaseAuth.instance.signOut();
+          if (mounted) {
+            Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+          }
+        } else {
+          final diff = expiryTime.difference(now);
+          final minutes = diff.inMinutes.toString().padLeft(2, '0');
+          final seconds = (diff.inSeconds % 60).toString().padLeft(2, '0');
+          if (mounted) {
+            setState(() {
+              _remainingGuestTime = '$minutes:$seconds';
+            });
+          }
+        }
+      }
+    });
+  }
+
   @override
   void dispose() {
     _searchFocusNode.dispose();
@@ -382,6 +471,7 @@ class _HomeScreenState extends State<HomeScreen>
     _connectivitySubscription?.cancel();
     _compassSubscription?.cancel();
     _placeholderTimer?.cancel();
+    _guestSessionTimer?.cancel();
     _indoorPositioningSubscription?.cancel();
     _indoorPositioningService.dispose();
     super.dispose();
@@ -714,6 +804,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _showLocationSnackbar(String message) {
+    if (_isOffline) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -749,28 +840,29 @@ class _HomeScreenState extends State<HomeScreen>
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
-  void _applyFilter(FilterResult result) {
+  Future<void> _applyFilter(FilterResult result) async {
     setState(() {
       _activeFilter = result;
       _searchQuery = result.displayLabel;
       _searchController.text = result.displayLabel;
-      
-      // Directly switch floors while using filters
-      if (result.floor != null) {
-        _selectedFloor = result.floor!;
-        _mapKey.currentState?.setFloor(result.floor!);
-      } else if (result.type != null) {
-        final matchingRoom = _allRooms.firstWhere(
-          (r) => r.type.toLowerCase().contains(result.type!),
-          orElse: () => _allRooms.firstWhere((r) => r.floor == _selectedFloor, orElse: () => _allRooms.first),
-        );
-        
-        if (matchingRoom.floor != _selectedFloor) {
-          _selectedFloor = matchingRoom.floor;
-          _mapKey.currentState?.setFloor(matchingRoom.floor);
-        }
-      }
     });
+    
+    // Directly switch floors while using filters
+    if (result.floor != null) {
+      _selectedFloor = result.floor!;
+      await _mapKey.currentState?.setFloor(result.floor!);
+    } else if (result.type != null) {
+      final matchingRoom = _allRooms.firstWhere(
+        (r) => r.type.toLowerCase().contains(result.type!),
+        orElse: () => _allRooms.firstWhere((r) => r.floor == _selectedFloor, orElse: () => _allRooms.first),
+      );
+      
+      if (matchingRoom.floor != _selectedFloor) {
+        _selectedFloor = matchingRoom.floor;
+        await _mapKey.currentState?.setFloor(matchingRoom.floor);
+      }
+    }
+
     // Highlight matching rooms on the map
     _mapKey.currentState?.setHighlight(result.type);
     // Re-focus so keyboard comes back
@@ -1100,6 +1192,7 @@ class _HomeScreenState extends State<HomeScreen>
             _selectedRoomFloor = null;
             _isNavigating = false;
             _directionSteps = [];
+            _navigationService.stopNavigation();
             _mapKey.currentState?.setRoute(null);
             _mapKey.currentState?.setHighlight(null);
           } else if (_isSearchFocused) {
@@ -1113,6 +1206,7 @@ class _HomeScreenState extends State<HomeScreen>
             // 2. Exit Map Navigation (clear active route path)
             _isNavigating = false;
             _directionSteps = [];
+            _navigationService.stopNavigation();
             _mapKey.currentState?.setRoute(null);
           } else if (_selectedRoomName != null) {
             // 3. Clear Room Selection
@@ -1165,17 +1259,16 @@ class _HomeScreenState extends State<HomeScreen>
               child: IndoorMapWidget(
                 key: _mapKey,
                 currentFloor: _userPhysicalFloor ?? 0,
-                userLocation: _currentLocation,
+                userLocation: _isOffline ? null : _currentLocation,
                 heading: _heading,
                 isNavigating: _isNavigating,
-                onRoomSelected: (name, centroid) {
+                onRoomSelected: (name, centroid, roomNo, floor) {
                   _checkFirstTimeQRGuide();
-                  // Find the room to get its floor
-                  final room = _allRooms.firstWhereOrNull((r) => r.name == name);
                   setState(() {
                     _selectedRoomName = name;
+                    _selectedRoomNo = roomNo;
                     _selectedRoomCentroid = centroid;
-                    _selectedRoomFloor = room?.floor;
+                    _selectedRoomFloor = floor;
                     _isNavigating = false; 
                     _directionSteps = [];
                   });
@@ -1202,7 +1295,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
 
           // ── 2. TOP SEARCH BAR (map mode) ────────────────────────────────────
-          if (!_isSearchFocused)
+          if (!_isSearchFocused && !_isOffline)
             Positioned(
               top: MediaQuery.of(context).padding.top + 12,
               left: 14,
@@ -1211,23 +1304,15 @@ class _HomeScreenState extends State<HomeScreen>
             ),
 
           // ── 1.5. FULL-SCREEN SEARCH OVERLAY ─────────────────────────────────
-          if (_isSearchFocused)
+          if (_isSearchFocused && !_isOffline)
             Positioned.fill(
               child: _buildSearchOverlay(context),
             ),
 
-          // ── 3. AI ICON BUTTON (above compass) ────────────────────────────
-/*
-          if (!_isSearchFocused)
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 200,
-              right: 16,
-              child: _buildAiIconButton(),
-            ),
-*/
+          // AI button removed from stack
 
           // ── 3.5. COMPASS ───────────────────────────────────────────────────
-          if (!_isSearchFocused)
+          if (!_isSearchFocused && !_isOffline)
             Positioned(
               bottom: MediaQuery.of(context).size.height * 0.60,
               right: 16,
@@ -1236,7 +1321,7 @@ class _HomeScreenState extends State<HomeScreen>
 
 
           // ── 4. LOCATION BUTTON (bottom right) ──────────────────────────────
-          if (!_isSearchFocused)
+          if (!_isSearchFocused && !_isOffline)
             Positioned(
               bottom: MediaQuery.of(context).size.height * 0.60 - 75,
               right: 8,
@@ -1244,7 +1329,7 @@ class _HomeScreenState extends State<HomeScreen>
             ),
 
           // ── 4.5. FLOOR SELECTOR (layers icon) ──────────────────────────────
-          if (!_isSearchFocused)
+          if (!_isSearchFocused && !_isOffline)
             Positioned(
               top: MediaQuery.of(context).size.height * 0.15,
               right: 16,
@@ -1255,55 +1340,58 @@ class _HomeScreenState extends State<HomeScreen>
           // ── 5. OFFLINE OVERLAY ─────────────────────────────────────────────
           if (_isOffline)
             Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.6),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 64),
-                      const SizedBox(height: 16),
-                      const Text(
-                        "Internet Connection Required",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'googlesans',
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 64),
+                        const SizedBox(height: 16),
+                        const Text(
+                          "Internet Connection Required",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'googlesans',
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        "Please turn on internet to view the map.",
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                          fontFamily: 'googlesans',
+                        const SizedBox(height: 8),
+                        const Text(
+                          "Please turn on internet to view the map.",
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            fontFamily: 'googlesans',
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: _checkInitialConnectivity,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF5B5FEF),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        const SizedBox(height: 24),
+                        ElevatedButton(
+                          onPressed: _checkInitialConnectivity,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF5B5FEF),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text("Retry", style: TextStyle(color: Colors.white)),
                         ),
-                        child: const Text("Retry", style: TextStyle(color: Colors.white)),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
           
           // ── 5.5 GUEST BLOCKED OVERLAY ──────────────────────────────────────
-          if (_isGuestBlocked)
+          if (_isGuestBlocked && !_isOffline)
             Positioned.fill(
               child: _buildGuestBlockedOverlay(),
             ),
 
           // ── 6. DIRECTIONS BUTTON ───────────────────────────────────────────
-          if (!_isSearchFocused && _selectedRoomName != null)
+          if (!_isSearchFocused && _selectedRoomName != null && !_isOffline)
             Positioned(
               bottom: MediaQuery.of(context).padding.bottom + 16,
               left: 16,
@@ -1410,11 +1498,28 @@ class _HomeScreenState extends State<HomeScreen>
                     padding: const EdgeInsets.symmetric(vertical: 10.0),
                     child: InkWell(
                       onTap: () {
-                        setState(() {
-                          _selectedFloor = val;
-                          _isFloorMenuOpen = false;
-                        });
-                        _mapKey.currentState?.setFloor(val);
+                        if (_selectedFloor != val) {
+                          setState(() {
+                            _selectedFloor = val;
+                            _isFloorMenuOpen = false;
+                            
+                            // Hide directions immediately when switching to another floor
+                            _isNavigating = false;
+                            _directionSteps = [];
+                            _selectedRoomName = null;
+                            _selectedRoomNo = null;
+                            _selectedRoomCentroid = null;
+                            _selectedRoomFloor = null;
+                          });
+                          _navigationService.stopNavigation();
+                          _mapKey.currentState?.setRoute(null);
+                          _mapKey.currentState?.setHighlight(null);
+                          _mapKey.currentState?.setFloor(val);
+                        } else {
+                          setState(() {
+                            _isFloorMenuOpen = false;
+                          });
+                        }
                       },
                       borderRadius: BorderRadius.circular(16),
                       child: Container(
@@ -1466,9 +1571,55 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
         ),
+      if (_remainingGuestTime != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 12.0),
+          child: _buildGuestSessionButton(),
+        ),
     ],
   );
 }
+
+  Widget _buildGuestSessionButton() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF6C63FF), Color(0xFF4C46B6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.timer_outlined,
+            color: Colors.white,
+            size: 18,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _remainingGuestTime ?? '00:00',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              fontFamily: 'googlesans',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildCompass() {
     return GestureDetector(
@@ -1516,81 +1667,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /*
-  // ── AI ICON FLOATING BUTTON ──────────────────────────────────────────────
-  Widget _buildAiIconButton() {
-    return GestureDetector(
-      onTap: () => _openAiAssistant(context),
-      child: Container(
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF4F46E5).withValues(alpha: 0.35),
-              blurRadius: 16,
-              spreadRadius: 2,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Image.asset(
-            'assets/images/aiIcon.png',
-            fit: BoxFit.contain,
-          ),
-        ),
-      ),
-    );
-  }
-  */
-
-  /*
-  // ── OPEN AI ASSISTANT ──────────────────────────────────────────────────────
-  Future<void> _openAiAssistant(BuildContext context) async {
-    // Unfocus any active search before navigating
-    _searchFocusNode.unfocus();
-    if (_isSearchFocused) {
-      setState(() {
-        _isSearchFocused = false;
-        _searchQuery = '';
-        _searchController.clear();
-      });
-    }
-
-    // Navigate and receive the optional deep-link room back
-    final RoomSearchItem? selectedRoom = await Navigator.push<RoomSearchItem>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => AIAssistantScreen(allRooms: _allRooms),
-      ),
-    );
-
-    // If the user tapped "Show on Map" in the AI chat, focus that room
-    if (selectedRoom != null && mounted) {
-      setState(() {
-        _selectedRoomName = selectedRoom.name;
-        _selectedRoomCentroid = selectedRoom.centroid;
-        _selectedRoomFloor = selectedRoom.floor;
-        _selectedFloor = selectedRoom.floor;
-        _searchQuery = selectedRoom.name;
-        _searchController.text = selectedRoom.name;
-        _isNavigating = false;
-        _directionSteps = [];
-      });
-      _mapKey.currentState?.setFloor(selectedRoom.floor);
-      _mapKey.currentState?.selectAndFocusRoom(
-        selectedRoom.floor,
-        selectedRoom.name,
-        selectedRoom.centroid,
-      );
-      _showLocationSnackbar('📍 Showing ${selectedRoom.name} from AI Assistant');
-    }
-  }
-  */
+  // AI helper methods removed
 
   // ── SEMANTIC SEARCH ENGINE ────────────────────────────────────────────────
   
@@ -1885,35 +1962,7 @@ class _HomeScreenState extends State<HomeScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 12),
-/*
-                      // ── AI ASSISTANT BUTTON (between search and suggestions) ──
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                        child: GestureDetector(
-                          onTap: () => _openAiAssistant(context),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFF4F46E5).withValues(alpha: 0.25),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 6),
-                                ),
-                              ],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: Image.asset(
-                                'assets/images/aiButton.png',
-                                width: double.infinity,
-                                fit: BoxFit.fitWidth,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-*/
+                      // AI banner removed from search overlay
                       const Padding(
                         padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                         child: Text(
@@ -2202,116 +2251,10 @@ class _HomeScreenState extends State<HomeScreen>
       },
       219: {
         'name': 'Prof. Vijay Prasad',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Computer Applications',
-        'email': 'vijay.prasad@dbuniversity.ac.in',
-      },
-      220: {
-        'name': 'Dr. Smriti Priya',
-        'designation': 'Professor',
-        'dept': 'Dept. of Civil Engineering',
-        'email': 'smriti.priya@dbuniversity.ac.in',
-      },
-      221: {
-        'name': 'Prof. Hemant Kalita',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Civil Engineering',
-        'email': 'hemant.kalita@dbuniversity.ac.in',
-      },
-      317: {
-        'name': 'Dr. Bikramjit Goswami',
-        'designation': 'Associate Professor',
-        'dept': 'Dept. of Electrical & Electronics',
-        'email': 'bikramjit.goswami@dbuniversity.ac.in',
-      },
-      318: {
-        'name': 'Prof. P. Joseph',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Electrical & Electronics',
-        'email': 'joseph.p@dbuniversity.ac.in',
-      },
-      319: {
-        'name': 'Dr. Sunandan Baruah',
-        'designation': 'Professor & Dean',
-        'dept': 'Dept. of Engineering & Technology',
-        'email': 'sunandan.baruah@dbuniversity.ac.in',
-      },
-      320: {
-        'name': 'Prof. Nupur Choudhury',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Electronics & Communications',
-        'email': 'nupur.choudhury@dbuniversity.ac.in',
-      },
-      321: {
-        'name': 'Dr. Shakuntala Laskar',
-        'designation': 'Professor',
-        'dept': 'Dept. of Electronics & Communications',
-        'email': 'shakuntala.laskar@dbuniversity.ac.in',
-      },
-      322: {
-        'name': 'Prof. Gitanjali Devi',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Humanities & Social Sciences',
-        'email': 'gitanjali.devi@dbuniversity.ac.in',
-      },
-      324: {
-        'name': 'Dr. Monmayuri Goswami',
-        'designation': 'Associate Professor',
-        'dept': 'Dept. of Basic Sciences',
-        'email': 'monmayuri.goswami@dbuniversity.ac.in',
-      },
-      325: {
-        'name': 'Prof. Subra Mukherjee',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Basic Sciences',
-        'email': 'subra.mukherjee@dbuniversity.ac.in',
-      },
+      }
     };
-
-    try {
-      // Query all rooms of type 'cabin' from the live Firestore locations collection
-      final snapshot = await FirebaseFirestore.instance
-          .collection('locations')
-          .where('r_type', isEqualTo: 'cabin')
-          .get();
-
-      if (snapshot.docs.isEmpty) return;
-
-      final WriteBatch batch = FirebaseFirestore.instance.batch();
-      bool hasUpdates = false;
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final int roomNo = data['r_no'] ?? 0;
-        final String currentDescription = data['Description'] ?? '';
-
-        // Only seed if the room matches a room number in our seed data
-        if (facultySeedData.containsKey(roomNo)) {
-          final fInfo = facultySeedData[roomNo]!;
-          final String seedDescription = '${fInfo['name']}|${fInfo['designation']}|${fInfo['dept']}|${fInfo['email']}';
-
-          // Self-Healing Protection: Only update if the current description is generic/fallback
-          if (currentDescription.contains('Room FACULTY CABIN') || 
-              currentDescription.contains('Room RESEARCH SCHOLAR') || 
-              currentDescription.isEmpty) {
-            
-            batch.update(doc.reference, {
-              'Description': seedDescription,
-            });
-            hasUpdates = true;
-          }
-        }
-      }
-
-      if (hasUpdates) {
-        await batch.commit();
-        debugPrint("🔍 [Faculty Seeder] Successfully seeded live Firestore cabin profiles!");
-      } else {
-        debugPrint("🔍 [Faculty Seeder] Live database is already seeded. Skipping updates.");
-      }
-    } catch (e) {
-      debugPrint("🔍 [Faculty Seeder] Error seeding faculty cabins: $e");
-    }
+    // Deprecated logic
+    return;
   }
 
   bool _isPointInCampusPolygon(LatLng point) {
@@ -2543,6 +2486,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     setState(() {
       _isNavigating = true;
+      _hasShownArrivalSnackBar = false;
       if (enableCompass) {
         _isOrientationMode = true;
         if (_currentLocation != null) {
@@ -2571,7 +2515,8 @@ class _HomeScreenState extends State<HomeScreen>
                 valueListenable: _navigationService.state,
                 builder: (_, navState, __) {
                   // Show arrival snackbar when arrived
-                  if (navState?.hasArrived == true) {
+                  if (navState?.hasArrived == true && !_hasShownArrivalSnackBar) {
+                    _hasShownArrivalSnackBar = true;
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted && _isNavigating) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -2776,15 +2721,13 @@ class _HomeScreenState extends State<HomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _selectedRoomName ?? '',
+                      UniUtils.toTitleCase(_selectedRoomName ?? ''),
                       style: const TextStyle(
                         fontFamily: 'googlesans',
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       _selectedRoomFloor != null
@@ -2797,19 +2740,6 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
                   ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: _showAllStepsBottomSheet,
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF3B5BDB),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.directions_rounded, color: Colors.white, size: 22),
                 ),
               ),
               const SizedBox(width: 8),
@@ -2884,25 +2814,135 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         ],
       ),
-      child: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('locations')
-            .where('L_name', isEqualTo: _selectedRoomName)
-            .limit(1)
-            .snapshots(),
-        builder: (context, snapshot) {
+      child: Builder(
+        builder: (context) {
+          String floorDocId = 'GroundFloor';
+          if (_selectedRoomFloor == 1) floorDocId = 'FirstFloor';
+          else if (_selectedRoomFloor == 2) floorDocId = 'SecondFloor';
+          else if (_selectedRoomFloor == 3) floorDocId = 'ThirdFloor';
+          else if (_selectedRoomFloor == 4) floorDocId = 'FourthFloor';
+
+          return StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('Azara_Campus')
+                .doc('Building')
+                .collection('Floors')
+                .doc(floorDocId)
+                .collection(floorDocId == 'FirstFloor' || floorDocId == 'GroundFloor' ? 'rooms' : 'Rooms')
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                debugPrint("FIRESTORE ERROR: ${snapshot.error}");
+              }
+              if (snapshot.hasData) {
+                debugPrint("FIRESTORE DATA: Received ${snapshot.data!.docs.length} room documents for floor $floorDocId");
+              }
           String description = '';
           String rType = '';
-          int rNo = 0;
+          String rNo = _selectedRoomNo?.trim() ?? '';
+          String imageUrl = '';
+          String? dbCabin1;
+          String? dbCabin2;
+          String? dbCabin3;
+          String? dbAvailability;
           if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-            final data = snapshot.data!.docs.first.data() as Map<String, dynamic>;
-            description = data['Description'] ?? '';
-            rType = data['r_type'] ?? '';
-            rNo = data['r_no'] ?? 0;
+            final targetName = _selectedRoomName?.toLowerCase().trim() ?? '';
+            final rawRoomNo = _selectedRoomNo?.trim() ?? '';
+
+            // Build the Firestore document ID from floor prefix + room number (e.g. "GF006")
+            String floorPrefix = 'GF';
+            if (_selectedRoomFloor == 1) floorPrefix = 'FF';
+            else if (_selectedRoomFloor == 2) floorPrefix = 'SF';
+            else if (_selectedRoomFloor == 3) floorPrefix = 'TF';
+            else if (_selectedRoomFloor == 4) floorPrefix = 'FoF';
+
+            QueryDocumentSnapshot? targetDoc;
+
+            // 1. Try matching by document ID (most reliable)
+            if (rawRoomNo.isNotEmpty) {
+              final docId = '$floorPrefix$rawRoomNo'.replaceAll(' ', '').toLowerCase();
+              final fallbackDocId1 = 'ff$rawRoomNo'.replaceAll(' ', '').toLowerCase();
+              final fallbackDocId2 = 'fof$rawRoomNo'.replaceAll(' ', '').toLowerCase();
+              final fallbackDocId3 = '4f$rawRoomNo'.replaceAll(' ', '').toLowerCase();
+              
+              debugPrint("Searching by ID. Target docId: $docId, fallbacks: $fallbackDocId1, $fallbackDocId2, $fallbackDocId3");
+              for (var doc in snapshot.data!.docs) {
+                final currentId = doc.id.toLowerCase();
+                if (currentId == docId || 
+                    currentId == fallbackDocId1 || 
+                    currentId == fallbackDocId2 || 
+                    currentId == fallbackDocId3) {
+                  targetDoc = doc;
+                  break;
+                }
+              }
+            }
+
+            // 2. Fall back to name matching
+            if (targetDoc == null) {
+              debugPrint("Room doc not found by ID. Falling back to name matching for: '$targetName'");
+              for (var doc in snapshot.data!.docs) {
+                final d = doc.data() as Map<String, dynamic>;
+                final rName = d['roomName']?.toString().toLowerCase().trim() ?? '';
+                final lName = d['liftName']?.toString().toLowerCase().trim() ?? '';
+                final sName = d['staircaseName']?.toString().toLowerCase().trim() ?? '';
+                if (rName == targetName || lName == targetName || sName == targetName) {
+                  targetDoc = doc;
+                  break;
+                }
+              }
+            }
+
+            if (targetDoc != null) {
+              final data = targetDoc.data() as Map<String, dynamic>;
+              debugPrint("Successfully matched room document: ${targetDoc.id}");
+              description = data['Description'] ?? data['description'] ?? data['registrarName'] ?? '';
+              rType = data['roomType'] ?? data['navigationType'] ?? data['r_type'] ?? '';
+              rNo = data['roomNumbers']?.toString() ?? data['roomNumber']?.toString() ?? data['liftNumber']?.toString() ?? data['staircaseNumber']?.toString() ?? data['r_no']?.toString() ?? data['roomNo']?.toString() ?? '';
+              if (rNo.isEmpty) {
+                if (rawRoomNo.isNotEmpty) {
+                  rNo = rawRoomNo;
+                } else if (targetDoc.id.isNotEmpty) {
+                  rNo = targetDoc.id.replaceAll(RegExp(r'[^0-9]'), '');
+                }
+              }
+              imageUrl = data['imageUrl'] ?? '';
+              
+              // Extract new Firestore cabin fields
+              dbCabin1 = data['cabin 1'] ?? data['cabin1'];
+              dbCabin2 = data['cabin 2'] ?? data['cabin2'];
+              dbCabin3 = data['cabin 3'] ?? data['cabin3'];
+              dbAvailability = data['availabilityHours'];
+            } else {
+              debugPrint("No matching room document found in Firestore.");
+            }
           }
-          final isCabin = rType.toLowerCase() == 'cabin';
+          final isCabin = rType.toLowerCase() == 'cabin' || rType.toLowerCase() == 'faculty cabin' || rType.toLowerCase() == 'fcabin' || rType.toLowerCase().contains('cabin');
           final parts = description.split('|');
+          final bool hasDbCabinInfo = dbCabin1 != null || dbCabin2 != null || dbCabin3 != null || dbAvailability != null;
+          
           final isFacultyProfile = isCabin && parts.length >= 4;
+
+          final String nameLower = _selectedRoomName?.toLowerCase() ?? '';
+          final String rTypeLower = rType.toLowerCase();
+          final bool hideRoomNo = nameLower.contains('lift') || 
+              nameLower.contains('stair') || 
+              nameLower.contains('green area') || 
+              nameLower.contains('parking') || 
+              nameLower.contains('atrium') || 
+              nameLower.contains('nescafe') ||
+              nameLower.contains('workshop') ||
+              nameLower.contains('auditorium') ||
+              nameLower.contains('ncc') ||
+              nameLower.contains('gate') ||
+              nameLower.contains('reception') ||
+              rTypeLower.contains('lift') ||
+              rTypeLower.contains('stair') ||
+              rTypeLower.contains('parking') ||
+              rTypeLower.contains('workshop') ||
+              rTypeLower.contains('auditorium') ||
+              rTypeLower.contains('gate') ||
+              rTypeLower.contains('reception');
 
           final floorName = _selectedRoomFloor == null
               ? 'Unknown'
@@ -2915,6 +2955,35 @@ class _HomeScreenState extends State<HomeScreen>
                           : _selectedRoomFloor == 3
                               ? '3rd Floor'
                               : 'Floor $_selectedRoomFloor';
+
+          final Widget placeholderImage = Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.image_outlined, color: Colors.grey[400], size: 36),
+                const SizedBox(height: 6),
+                Text(
+                  'IMAGE',
+                  style: TextStyle(
+                    fontFamily: 'googlesans',
+                    color: Colors.grey[500],
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  UniUtils.toTitleCase(_selectedRoomName ?? ''),
+                  style: TextStyle(
+                    fontFamily: 'googlesans',
+                    color: Colors.grey[600],
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          );
 
           return Column(
             mainAxisSize: MainAxisSize.min,
@@ -2946,15 +3015,13 @@ class _HomeScreenState extends State<HomeScreen>
                     // Location Name Text (vibrant blue color, bold)
                     Expanded(
                       child: Text(
-                        _selectedRoomName ?? '',
+                        UniUtils.toTitleCase(_selectedRoomName ?? ''),
                         style: const TextStyle(
                           fontFamily: 'googlesans',
-                          fontSize: 22,
+                          fontSize: 15,
                           fontWeight: FontWeight.bold,
                           color: Color(0xFF2563EB),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     
@@ -2963,11 +3030,13 @@ class _HomeScreenState extends State<HomeScreen>
                       onTap: () {
                         setState(() {
                           _selectedRoomName = null;
+                          _selectedRoomNo = null;
                           _selectedRoomCentroid = null;
                           _selectedRoomFloor = null;
                           _isNavigating = false;
                           _directionSteps = [];
                         });
+                        _navigationService.stopNavigation();
                         _mapKey.currentState?.setRoute(null);
                       },
                       child: Container(
@@ -3004,24 +3073,43 @@ class _HomeScreenState extends State<HomeScreen>
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Room no. ${rNo > 0 ? rNo : "-"}',
-                          style: const TextStyle(
-                            fontFamily: 'googlesans',
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            color: Color(0xFF0F766E),
+                        if (!hideRoomNo) ...[
+                          Text(
+                            'Room no. ${rNo.isNotEmpty ? rNo : "-"}',
+                            style: const TextStyle(
+                              fontFamily: 'googlesans',
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF0F766E),
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Floor : $floorName',
-                          style: const TextStyle(
-                            fontFamily: 'googlesans',
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            color: Color(0xFF0F766E),
-                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        FutureBuilder<DocumentSnapshot>(
+                          future: FirebaseFirestore.instance
+                              .collection('Azara_Campus')
+                              .doc('Building')
+                              .collection('Floors')
+                              .doc(floorDocId)
+                              .get(),
+                          builder: (context, floorSnap) {
+                            String finalFloorName = floorName; // fallback
+                            if (floorSnap.hasData && floorSnap.data!.exists) {
+                              final fData = floorSnap.data!.data() as Map<String, dynamic>?;
+                              if (fData != null && fData.containsKey('floor')) {
+                                finalFloorName = fData['floor'].toString();
+                              }
+                            }
+                            return Text(
+                              'Floor : $finalFloorName',
+                              style: const TextStyle(
+                                fontFamily: 'googlesans',
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF0F766E),
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -3029,7 +3117,7 @@ class _HomeScreenState extends State<HomeScreen>
                     // "Go Now" Gradient Button
                     GestureDetector(
                       onTap: () {
-                        _startNavigation(enableCompass: true);
+                        _startNavigation(enableCompass: false);
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -3089,100 +3177,207 @@ class _HomeScreenState extends State<HomeScreen>
               const SizedBox(height: 16),
 
               // Image Section
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    height: 130,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE5E7EB), // Sleek grey matching mockup
-                      borderRadius: BorderRadius.circular(16),
+              if (!rType.toLowerCase().contains('class')) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      height: 130,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE5E7EB), // Sleek grey matching mockup
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: isFacultyProfile
+                          ? _buildFacultyImageCard(parts)
+                          : imageUrl.isNotEmpty
+                              ? GestureDetector(
+                                  onTap: () {
+                                    _showImagePreview(context, imageUrl);
+                                  },
+                                  child: Image.network(
+                                    imageUrl,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) => placeholderImage,
+                                  ),
+                                )
+                              : placeholderImage,
                     ),
-                    child: isFacultyProfile
-                        ? _buildFacultyImageCard(parts)
-                        : Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.image_outlined, color: Colors.grey[400], size: 36),
-                                const SizedBox(height: 6),
-                                Text(
-                                  'IMAGE',
-                                  style: TextStyle(
-                                    fontFamily: 'googlesans',
-                                    color: Colors.grey[500],
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 1.2,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _selectedRoomName ?? '',
-                                  style: TextStyle(
-                                    fontFamily: 'googlesans',
-                                    color: Colors.grey[600],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
                   ),
                 ),
-              ),
-
-              const SizedBox(height: 12),
+                const SizedBox(height: 12),
+              ],
 
               // Description Section
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  constraints: BoxConstraints(
+                    // Dynamically expand the maxHeight if it's a faculty cabin to display full details without clipping
+                    maxHeight: (isFacultyProfile || hasDbCabinInfo)
+                        ? MediaQuery.of(context).size.height * 0.45
+                        : MediaQuery.of(context).size.height * 0.25,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF3F4F6), // Matches description block background
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Description',
-                        style: TextStyle(
-                          fontFamily: 'googlesans',
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.grey[500],
-                          letterSpacing: 1.1,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Description',
+                                  style: TextStyle(
+                                    fontFamily: 'googlesans',
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey[500],
+                                    letterSpacing: 1.1,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                if (isFacultyProfile || hasDbCabinInfo)
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        parts.length > 2 ? '${parts[1]}, ${parts[2]}' : 'Faculty Cabin Details',
+                                        style: TextStyle(
+                                          fontFamily: 'googlesans',
+                                          fontSize: 13.5,
+                                          color: Colors.grey[700],
+                                          height: 1.4,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      const Divider(height: 1, color: Colors.black12),
+                                      const SizedBox(height: 12),
+                                      _buildCabinDetailRow('Cabin 1', dbCabin1 ?? _cabin1),
+                                      const SizedBox(height: 6),
+                                      _buildCabinDetailRow('Cabin 2', dbCabin2 ?? _cabin2),
+                                      const SizedBox(height: 6),
+                                      _buildCabinDetailRow('Cabin 3', dbCabin3 ?? _cabin3),
+                                      const SizedBox(height: 6),
+                                      _buildCabinDetailRow('Availability Hours', dbAvailability ?? _availabilityHours),
+                                    ],
+                                  )
+                                else
+                                  Text(
+                                    description.isNotEmpty ? description : 'No description available.',
+                                    style: TextStyle(
+                                      fontFamily: 'googlesans',
+                                      fontSize: 13.5,
+                                      color: Colors.grey[700],
+                                      height: 1.4,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        (description.isNotEmpty && !isFacultyProfile)
-                            ? description
-                            : isFacultyProfile && parts.length > 2
-                                ? '${parts[1]}, ${parts[2]}'
-                                : 'No description available.',
-                        style: TextStyle(
-                          fontFamily: 'googlesans',
-                          fontSize: 13.5,
-                          color: Colors.grey[700],
-                          height: 1.4,
-                        ),
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                        if (FirebaseAuth.instance.currentUser?.isAnonymous ?? false)
+                          Positioned.fill(
+                            child: BackdropFilter(
+                              filter: ui.ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+                              child: Container(
+                                color: Colors.white.withValues(alpha: 0.65),
+                                child: const Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 16),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.lock_outline_rounded, color: Colors.black54, size: 28),
+                                        SizedBox(height: 8),
+                                        Text(
+                                          'Login with a valid ID to view description',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontFamily: 'googlesans',
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ],
           );
-        },
-      ),
+        }, // Closes StreamBuilder builder
+      ); // Closes StreamBuilder
+      }, // Closes Builder builder
+      ), // Closes Builder
+    );
+  }
+
+  void _showImagePreview(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.85),
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.contain,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const Center(
+                      child: CircularProgressIndicator(color: Colors.white),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Center(
+                      child: Icon(Icons.broken_image, color: Colors.white, size: 50),
+                    );
+                  },
+                ),
+              ),
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 16,
+                right: 16,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 24),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -3257,6 +3452,33 @@ class _HomeScreenState extends State<HomeScreen>
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildCabinDetailRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$label: ',
+          style: const TextStyle(
+            fontFamily: 'googlesans',
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: Colors.black54,
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              fontFamily: 'googlesans',
+              fontSize: 13,
+              color: Colors.black87,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -3482,6 +3704,7 @@ Widget _buildSearchBar(BuildContext context) {
                         _selectedRoomFloor = null;
                         _isNavigating = false;
                         _directionSteps = [];
+                        _navigationService.stopNavigation();
                         _mapKey.currentState?.setRoute(null);
                         _mapKey.currentState?.setHighlight(null);
                       });

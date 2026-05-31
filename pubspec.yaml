@@ -48,7 +48,6 @@ dependencies:
   mobile_scanner: ^7.2.0
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.0
-  google_generative_ai: ^0.4.7
   geolocator: ^13.0.2
   video_player: ^2.11.0
 
@@ -68,7 +67,7 @@ dev_dependencies:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: "assets/images/unimapIcon.png"
+  image_path: "assets/images/Icon.jpg"
   min_sdk_android: 21 # flutter_launcher_icons requires this to be specified if not using default
 
 # For information on the generic Dart part of this file, see the
@@ -91,10 +90,8 @@ flutter:
     - assets/images/adbuLogo.png
     - assets/Video/main.mp4
     - assets/Video/profileBack.mp4
-    - assets/images/unimapLogo.png
-    - assets/images/unimapIcon.png
-    - assets/images/aiButton.png
-    - assets/images/aiIcon.png
+    - assets/images/Logo.jpg
+    - assets/images/Icon.jpg
     - assets/geojson/ground.geojson
     - assets/geojson/floor_1.geojson
     - assets/geojson/floor_2.geojson

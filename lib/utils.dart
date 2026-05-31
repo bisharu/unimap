@@ -4,13 +4,13 @@ class UniUtils {
   static String? validateStudentId(String id) {
     id = id.toUpperCase();
     if (!id.startsWith('DC')) {
-      return 'ID must start with "DC"';
+      return 'Invalid ID';
     }
     if (id.length > 13) {
-      return 'ID cannot exceed 13 characters';
+      return 'Invalid ID';
     }
     if (id.length < 6) {
-      return 'ID is too short (needs DC + 4 digits)';
+      return 'Invalid ID';
     }
 
     // Extract potential last 4 digits (usually the end of the string)
@@ -18,15 +18,15 @@ class UniUtils {
     final numericValue = int.tryParse(lastFour);
 
     if (numericValue == null || !RegExp(r'^\d{4}$').hasMatch(lastFour)) {
-      return 'Last 4 characters must be digits';
+      return 'Invalid ID';
     }
 
     if (numericValue < 0 || numericValue > 100) {
-      return 'Last 4 digits must be between 0000 and 0100';
+      return 'Invalid ID';
     }
 
     if (!RegExp(r'^[A-Z0-9]+$').hasMatch(id)) {
-      return 'ID can only contain uppercase letters and numbers';
+      return 'Invalid ID';
     }
 
     return null;

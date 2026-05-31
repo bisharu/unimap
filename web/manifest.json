@@ -1,6 +1,6 @@
 {
-    "name": "unimap",
-    "short_name": "unimap",
+    "name": "Unimap",
+    "short_name": "Unimap",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

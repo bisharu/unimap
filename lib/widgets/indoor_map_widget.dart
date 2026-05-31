@@ -7,13 +7,16 @@ import 'package:flutter/services.dart';
 import '../utils/astar_router.dart';
 import '../models.dart';
 import '../services/navigation_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
+import '../utils.dart';
 
 // Floor identifiers: 0 = Ground, 1 = Floor 1, 2 = Floor 2, 3 = Floor 3, 4 = Floor 4
 class IndoorMapWidget extends StatefulWidget {
   final int currentFloor;
   final LatLng? userLocation;
   final double heading;
-  final Function(String name, LatLng centroid)? onRoomSelected;
+  final Function(String name, LatLng centroid, String roomNo, int floor)? onRoomSelected;
   final Function(List<NavPoint> path)? onRouteCalculated;
   final String? highlightType;
   final bool isNavigating;
@@ -43,6 +46,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   List<Polygon> _roomPolygons = [];
   List<Marker> _roomMarkers = [];
   List<Polyline> _routePolylines = [];
+  List<Polyline> _snapPolylines = [];
   List<Polyline> _borderPolylines = [];
   int _selectedFloor = 0;
   LatLng? _destinationLocation;
@@ -54,6 +58,8 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
   // Cache for GeoJSON data to avoid re-parsing
   final Map<int, Map<String, dynamic>> _geoJsonCache = {};
+
+  StreamSubscription? _firestoreSubscription;
 
   // 🔴 University Building Center (Assam Don Bosco University, Azara)
   // Fine-tuned based on your specific GeoJSON coordinates
@@ -232,19 +238,127 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
   Future<void> _loadFloorPlan(int floor) async {
     try {
+      // 1. Cancel any active listener from a previous floor switch
+      await _firestoreSubscription?.cancel();
+
+      // 2. Load the base geometry data from your local GeoJSON asset
       if (!_geoJsonCache.containsKey(floor)) {
         final String fileName = floor == 0 ? 'ground' : 'floor_$floor';
         final String data = await rootBundle.loadString('assets/geojson/$fileName.geojson');
         _geoJsonCache[floor] = json.decode(data);
       }
-      
+
+      // Render the default local map instantly while the network connects
       _updateMapObjects();
+      if (_highlightType != null) {
+        _zoomToFilteredRooms(_highlightType!);
+      }
+
+      // 3. Match floor integers to your exact Firestore floor document names
+      String floorDocId;
+      String prefix;
+      switch (floor) {
+        case 0:
+          floorDocId = 'GroundFloor';
+          prefix = 'GF';
+          break;
+        case 1:
+          floorDocId = 'FirstFloor';
+          prefix = 'FF';
+          break;
+        case 2:
+          floorDocId = 'SecondFloor';
+          prefix = 'SF';
+          break;
+        case 3:
+          floorDocId = 'ThirdFloor';
+          prefix = 'TF';
+          break;
+        case 4:
+          floorDocId = 'FourthFloor';
+          prefix = 'FF'; // Fourth floor prefix might be FoF, but matching user's code
+          break;
+        default:
+          floorDocId = 'GroundFloor';
+          prefix = 'GF';
+      }
+
+      // 4. Open the real-time pipeline to Firestore using lowercase 'rooms'
+      _firestoreSubscription = FirebaseFirestore.instance
+          .collection('Azara_Campus')
+          .doc('Building')
+          .collection('Floors')
+          .doc(floorDocId)
+          .collection(floorDocId == 'FirstFloor' || floorDocId == 'GroundFloor' ? 'rooms' : 'Rooms')
+          .snapshots()
+          .listen((firestoreSnapshot) {
+
+        // Create lookup maps of your cloud updates
+        final Map<String, Map<String, dynamic>> cloudRoomUpdatesById = {};
+        final Map<String, Map<String, dynamic>> cloudRoomUpdatesByName = {};
+        for (var doc in firestoreSnapshot.docs) {
+          if (doc.exists) {
+            final data = doc.data();
+            cloudRoomUpdatesById[doc.id.trim().toLowerCase()] = data;
+            
+            final String dbName = (data['roomName'] ?? '').toString().trim().toLowerCase();
+            if (dbName.isNotEmpty) {
+              cloudRoomUpdatesByName[dbName] = data;
+            }
+          }
+        }
+
+        // 5. Inject cloud changes back into our working cache memory
+        final baseGeoJson = _geoJsonCache[floor];
+        if (baseGeoJson != null && baseGeoJson['features'] != null) {
+          for (var feature in baseGeoJson['features']) {
+            final props = feature['properties'] ?? {};
+            final String localRoomNo = (props['roomNo'] ?? '').toString().trim();
+            final String localName = (props['name'] ?? '').toString().trim().toLowerCase();
+
+            // Stitch the prefix and room number to form IDs like "FF101"
+            final String firestoreStyleId = localRoomNo.isNotEmpty ? '$prefix$localRoomNo' : '';
+            final String altFirestoreStyleId1 = localRoomNo.isNotEmpty ? 'ff$localRoomNo' : '';
+            final String altFirestoreStyleId2 = localRoomNo.isNotEmpty ? 'fof$localRoomNo' : '';
+            final String altFirestoreStyleId3 = localRoomNo.isNotEmpty ? '4f$localRoomNo' : '';
+
+            // Check if this specific feature matches a document inside your Firestore 'rooms'
+            Map<String, dynamic>? cloudData;
+            if (cloudRoomUpdatesById.containsKey(firestoreStyleId.toLowerCase())) {
+              cloudData = cloudRoomUpdatesById[firestoreStyleId.toLowerCase()];
+            } else if (cloudRoomUpdatesById.containsKey(altFirestoreStyleId1.toLowerCase())) {
+              cloudData = cloudRoomUpdatesById[altFirestoreStyleId1.toLowerCase()];
+            } else if (cloudRoomUpdatesById.containsKey(altFirestoreStyleId2.toLowerCase())) {
+              cloudData = cloudRoomUpdatesById[altFirestoreStyleId2.toLowerCase()];
+            } else if (cloudRoomUpdatesById.containsKey(altFirestoreStyleId3.toLowerCase())) {
+              cloudData = cloudRoomUpdatesById[altFirestoreStyleId3.toLowerCase()];
+            }
+
+            if (cloudData != null) {
+              // Only sync the room type from Firestore — do NOT rewrite name
+              // because the tapped name must stay identical to what we search in the detail panel
+              props['type'] = cloudData['roomType'] ?? props['type'];
+            } else if (cloudRoomUpdatesByName.containsKey(localName)) {
+              final cloudData = cloudRoomUpdatesByName[localName]!;
+              props['type'] = cloudData['roomType'] ?? props['type'];
+            }
+          }
+        }
+
+        // 6. Force the UI to re-parse the data and refresh the visual layers
+        _updateMapObjects();
+      }, onError: (error) {
+        debugPrint('Firestore streaming error: $error');
+      });
+
     } catch (e) {
       debugPrint('Error loading floor plan: $e');
-      setState(() {
-        _roomPolygons = [];
-        _roomMarkers = [];
-      });
+      if (mounted) {
+        setState(() {
+          _roomPolygons = [];
+          _roomMarkers = [];
+        });
+      }
     }
   }
 
@@ -286,7 +400,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
         final String rawName = (properties['name'] ?? '').toString();
         final String rawRoomNo = (properties['roomNo'] ?? '').toString().trim();
-        final String name = rawName == 'null' ? '' : rawName;
+        final String name = rawName == 'null' ? '' : UniUtils.toTitleCase(rawName);
         final String roomNo = rawRoomNo == 'null' ? '' : rawRoomNo;
 
         // Use name for display; fall back to roomNo for identity
@@ -522,7 +636,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                 Text(
                   name,
                   style: TextStyle(
-                    fontSize: emphasize ? 12 : 10,
+                    fontSize: emphasize ? 13 : 12,
                     fontWeight: FontWeight.bold,
                     color: Colors.black87,
                     fontFamily: 'googlesans',
@@ -540,7 +654,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                   Text(
                     'Rm $roomNo',
                     style: TextStyle(
-                      fontSize: emphasize ? 10 : 9,
+                      fontSize: emphasize ? 12 : 11,
                       fontWeight: FontWeight.w600,
                       color: emphasize ? const Color(0xFF5B5FEF) : Colors.black54,
                       fontFamily: 'googlesans',
@@ -725,8 +839,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       setState(() {
         if (path == null || path.isEmpty) {
           _routePolylines = [];
-          _destinationLocation = null;
-          _destinationFloor = null;
         } else {
           final List<Polyline> polylines = [
             // 1. Path Glow / Outer Line
@@ -747,13 +859,15 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             ),
           ];
 
+          _snapPolylines = [];
+
           // 3. User Snap Dotted Line (Start)
           if (widget.userLocation != null) {
             final startLatLng = widget.userLocation!;
             final endLatLng = path.first;
             final distance = const Distance().as(LengthUnit.Meter, startLatLng, endLatLng);
             if (distance > 1.0) {
-              polylines.addAll([
+              _snapPolylines.addAll([
                 // Outer dotted line (accent outline)
                 Polyline(
                   points: [startLatLng, endLatLng],
@@ -780,7 +894,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             final endLatLng = _destinationLocation!;
             final distance = const Distance().as(LengthUnit.Meter, startLatLng, endLatLng);
             if (distance > 1.0) {
-              polylines.addAll([
+              _snapPolylines.addAll([
                 // Outer dotted line (accent outline)
                 Polyline(
                   points: [startLatLng, endLatLng],
@@ -802,6 +916,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           }
 
           _routePolylines = polylines;
+          _routePolylines.addAll(_snapPolylines);
         }
       });
     }
@@ -952,12 +1067,11 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     }
   }
 
-  void setFloor(int floor) {
+  Future<void> setFloor(int floor) async {
     if (_selectedFloor != floor) {
       setState(() => _selectedFloor = floor);
-      _loadFloorPlan(floor).then((_) {
-        _updateRouteLayer(); // Refresh route for the new floor
-      });
+      await _loadFloorPlan(floor);
+      _updateRouteLayer(); // Refresh route for the new floor
     }
   }
 
@@ -1118,7 +1232,25 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
       // Notify parent after selection is fully resolved
       if (tappedRoomName != null && tappedCentroid != null && widget.onRoomSelected != null) {
-        widget.onRoomSelected!(tappedRoomName, tappedCentroid);
+        // Also pass along the raw room number from GeoJSON so the detail panel can
+        // do a reliable Firestore document-ID lookup (e.g. "GF006") instead of name matching
+        String rawRoomNo = '';
+        final features = geoJson?['features'] as List<dynamic>?;
+        if (features != null) {
+          final tappedFeature = features.firstWhere(
+            (f) {
+              final props = f['properties'] as Map<String, dynamic>?;
+              if (props == null) return false;
+              return (props['name'] ?? '').toString() == tappedRoomName ||
+                     (props['roomNo'] ?? '').toString().trim() == tappedRoomName;
+            },
+            orElse: () => null,
+          );
+          if (tappedFeature != null) {
+            rawRoomNo = (tappedFeature['properties']['roomNo'] ?? '').toString().trim();
+          }
+        }
+        widget.onRoomSelected!(tappedRoomName, tappedCentroid, rawRoomNo, _selectedFloor);
       }
     }
   }
@@ -1198,6 +1330,8 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                             strokeJoin: StrokeJoin.round,
                           ),
                         ]),
+                      if (_snapPolylines.isNotEmpty)
+                        PolylineLayer(polylines: _snapPolylines),
                       // Animated Blue Dot
                       MarkerLayer(
                         markers: [

@@ -18,7 +18,7 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _isLoading = true;
   Timer? _timer;
   late VideoPlayerController _videoController;
-  String _timeRemaining = "00:00:30";
+  String _timeRemaining = "01:00:00";
 
   @override
   void initState() {
@@ -47,7 +47,7 @@ class _ProfilePageState extends State<ProfilePage> {
       _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
         final lastSignIn = user.metadata.lastSignInTime;
         if (lastSignIn != null) {
-          final expiryTime = lastSignIn.add(const Duration(seconds: 30));
+          final expiryTime = lastSignIn.add(const Duration(hours: 1));
           final remaining = expiryTime.difference(DateTime.now());
           if (remaining.isNegative) {
             timer.cancel();
@@ -102,7 +102,7 @@ class _ProfilePageState extends State<ProfilePage> {
     final String name = isGuest ? 'Guest User' : (_userData?['name'] ?? 'UniMap User');
     final String email = isGuest ? '' : (user?.email ?? 'N/A');
     
-    String displayId = "Timed Session (30s)";
+    String displayId = "Timed Session (1h)";
     if (!isGuest) {
       displayId = _userData?['studentId'] ?? 'ID: N/A';
     }

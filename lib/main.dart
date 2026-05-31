@@ -77,8 +77,8 @@ import 'upload_rooms.dart'; // Import the upload script
               if (user.isAnonymous) {
                 final lastSignIn = user.metadata.lastSignInTime;
                 if (lastSignIn != null) {
-                  // Define the session limit (e.g., 30 seconds)
-                  const sessionLimit = Duration(seconds: 30);
+                  // Define the session limit (e.g., 1 hour)
+                  const sessionLimit = Duration(hours: 1);
                   final expiryTime = lastSignIn.add(sessionLimit);
 
                   if (DateTime.now().isAfter(expiryTime)) {
@@ -309,8 +309,8 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
   void initState() {
     super.initState();
     
-    // Delay to simulate loading and show the beautiful splash text
-    Future.delayed(const Duration(milliseconds: 4000), () {
+    // Delay to simulate loading and show the logo for exactly 3 seconds
+    Future.delayed(const Duration(milliseconds: 3000), () {
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -323,11 +323,11 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF1A237E),
         body: Center(
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(begin: 0.0, end: 1.0),
-            duration: const Duration(milliseconds: 1400),
+            duration: const Duration(milliseconds: 800),
             curve: Curves.easeOutExpo,
             builder: (context, value, child) {
               return Transform.scale(
@@ -338,10 +338,13 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
                     mainAxisSize: MainAxisSize.min, // Keep contents compactly centered
                     children: [
                       // Show the actual unimap logo instead of the placeholder
-                      Image.asset(
-                        'assets/images/unimapIcon.png',
-                        width: 220,
-                        height: 220,
+                      ClipOval(
+                        child: Image.asset(
+                          'assets/images/Logo.jpg',
+                          width: 220,
+                          height: 220,
+                          fit: BoxFit.cover,
+                        ),
                       ),
                     ],
                   ),
@@ -356,3 +359,5 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
     return widget.child;
   }
 }
+
+

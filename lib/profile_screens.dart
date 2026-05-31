@@ -626,6 +626,7 @@ class FeedbackBottomSheet extends StatefulWidget {
 class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
   String? _selectedFeedbackType;
   final TextEditingController _feedbackController = TextEditingController();
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -635,6 +636,8 @@ class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isFormValid = _selectedFeedbackType != null && _feedbackController.text.trim().isNotEmpty;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: Column(
@@ -668,7 +671,7 @@ class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
                   _feedbackOption(Icons.bug_report_rounded, "Report a Bug"),
                   _feedbackOption(Icons.lightbulb_rounded, "Suggest a Feature"),
                   _feedbackOption(Icons.help_rounded, "Other Issues"),
-                  const SizedBox(height: 60),
+                  const SizedBox(height: 40),
                   if (_selectedFeedbackType != null) ...[
                     Text(
                       "Details for: $_selectedFeedbackType",
@@ -682,6 +685,9 @@ class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
                     TextField(
                       controller: _feedbackController,
                       maxLines: 4,
+                      onChanged: (val) {
+                        setState(() {});
+                      },
                       decoration: InputDecoration(
                         hintText: "Tell us more...",
                         filled: true,
@@ -698,40 +704,97 @@ class _FeedbackBottomSheetState extends State<FeedbackBottomSheet> {
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton(
-                      onPressed: () async {
-                        final String text = _feedbackController.text.trim();
-                        if (text.isEmpty) return;
+                      onPressed: (!isFormValid || _isSubmitting)
+                          ? null
+                          : () async {
+                              setState(() {
+                                _isSubmitting = true;
+                              });
+                              final String text = _feedbackController.text.trim();
 
-                        try {
-                          final user = FirebaseAuth.instance.currentUser;
-                          await FirebaseFirestore.instance.collection('feedback').add({
-                            'text': text,
-                            'userId': user?.uid ?? 'anonymous',
-                            'timestamp': FieldValue.serverTimestamp(),
-                          });
+                              try {
+                                final user = FirebaseAuth.instance.currentUser;
+                                String userName = 'Anonymous';
+                                String userEmail = 'anonymous@unimap.com';
 
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Thank you for your feedback!")),
-                            );
-                            Navigator.pop(context);
-                          }
-                        } catch (e) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Error: ${e.toString()}")),
-                            );
-                          }
-                        }
-                      },
+                                if (user != null) {
+                                  userEmail = user.email ?? '';
+                                  final userDoc = await FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(user.uid)
+                                      .get();
+                                  if (userDoc.exists) {
+                                    userName = userDoc.data()?['name'] ?? 'No Name';
+                                    if (userEmail.isEmpty) {
+                                      userEmail = userDoc.data()?['email'] ?? '';
+                                    }
+                                  }
+                                }
+
+                                await FirebaseFirestore.instance.collection('feedback').add({
+                                  'type': _selectedFeedbackType,
+                                  'text': text,
+                                  'userId': user?.uid ?? 'anonymous',
+                                  'userName': userName,
+                                  'userEmail': userEmail,
+                                  'timestamp': FieldValue.serverTimestamp(),
+                                });
+
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: const Text("Thank you for your feedback!"),
+                                      backgroundColor: Colors.green.shade700,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                  );
+                                  Navigator.pop(context);
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text("Error: ${e.toString()}"),
+                                      backgroundColor: Colors.red.shade700,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) {
+                                  setState(() {
+                                    _isSubmitting = false;
+                                  });
+                                }
+                              }
+                            },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF6C63FF),
+                        disabledBackgroundColor: const Color(0xFF6C63FF).withValues(alpha: 0.5),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: const Text(
-                        "Submit",
-                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
+                      child: _isSubmitting
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Text(
+                              "Submit",
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold),
+                            ),
                     ),
                   ),
                 ],
