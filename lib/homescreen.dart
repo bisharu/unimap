@@ -1833,7 +1833,6 @@ class _HomeScreenState extends State<HomeScreen>
                     showCursor: true,
                     cursorColor: Colors.blueAccent,
                     decoration: InputDecoration(
-                      // hintText: 'Search location',
                       hintStyle: TextStyle(
                         fontFamily: 'googlesans',
                         color: Colors.black.withValues(alpha: 0.38),
@@ -3482,95 +3481,6 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // ── SEARCH BAR (map mode – tappable pill) ───────────────────────────────────
-  // Widget _buildSearchBar(BuildContext context) {
-  //   if (_isInitializing) {
-  //     return const Skeleton(height: 52, borderRadius: 30);
-  //   }
-  //   return GestureDetector(
-  //     onTap: () {
-  //       setState(() => _isSearchFocused = true);
-  //       // autofocus in overlay handles keyboard
-  //     },
-  //     child: Container(
-  //       height: 52,
-  //       decoration: BoxDecoration(
-  //         color: Colors.white,
-  //         borderRadius: BorderRadius.circular(30),
-  //         boxShadow: [
-  //           BoxShadow(
-  //             color: Colors.black.withValues(alpha: 0.10),
-  //             blurRadius: 12,
-  //             offset: const Offset(0, 4),
-  //           ),
-  //         ],
-  //       ),
-  //       child: Row(
-  //         children: [
-  //           const SizedBox(width: 16),
-  //           const Icon(Icons.search_rounded, color: Colors.black54, size: 22),
-  //           const SizedBox(width: 10),
-  //           Expanded(
-  //             child: Text(
-  //               _searchQuery.isEmpty ? 'Search location' : _searchQuery,
-  //               style: TextStyle(
-  //                 fontFamily: 'googlesans',
-  //                 fontSize: 20,
-  //                 color: _searchQuery.isEmpty
-  //                     ? Colors.black.withValues(alpha: 0.40)
-  //                     : Colors.black87,
-  //               ),
-  //               overflow: TextOverflow.ellipsis,
-  //             ),
-  //           ),
-  //           const SizedBox(width: 8),
-  //           // QR Scanner button
-  //           GestureDetector(
-  //             onTap: () => _showQrScanner(context),
-  //             child: Container(
-  //               width: 36,
-  //               height: 36,
-  //               margin: const EdgeInsets.only(right: 4),
-  //               decoration: BoxDecoration(
-  //                 color: const Color(0xFF5B5FEF).withValues(alpha: 0.10),
-  //                 shape: BoxShape.circle,
-  //               ),
-  //               child: const Icon(
-  //                 Icons.qr_code_scanner_rounded,
-  //                 color: Color(0xFF5B5FEF),
-  //                 size: 20,
-  //               ),
-  //             ),
-  //           ),
-  //           const SizedBox(width: 4),
-  //           // Profile avatar
-  //           GestureDetector(
-  //             onTap: () => _showProfileMenu(context),
-  //             child: Container(
-  //               width: 36,
-  //               height: 36,
-  //               margin: const EdgeInsets.only(right: 8),
-  //               decoration: BoxDecoration(
-  //                 color: Colors.black.withValues(alpha: 0.7),
-  //                 shape: BoxShape.circle,
-  //               ),
-  //               child: Center(
-  //                 child: Text(
-  //                   _getUserInitial(),
-  //                   style: const TextStyle(
-  //                     color: Colors.white,
-  //                     fontWeight: FontWeight.bold,
-  //                     fontSize: 16,
-  //                   ),
-  //                 ),
-  //               ),
-  //             ),
-  //           ),
-  //         ],
-  //       ),
-  //     ),
-  //   );
-  // }
 
 Widget _buildSearchBar(BuildContext context) {
   final bool focused = _isSearchFocused;
@@ -3616,11 +3526,6 @@ Widget _buildSearchBar(BuildContext context) {
                   // Neon gradient border
                   color: Colors.transparent,
                 ),
-              // gradient: const LinearGradient(
-              //   colors: [Color(0xFFFF00FF), Color(0xFF00BFFF)], // pink → blue
-              //   begin: Alignment.centerLeft,
-              //   end: Alignment.centerRight,
-              // ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.pinkAccent.withValues(alpha: 0.4),
@@ -3645,7 +3550,6 @@ Widget _buildSearchBar(BuildContext context) {
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
-                    // border: Border.all(color: Colors.black.withValues(alpha: 0.3)),
                   ),
                   child: const Icon(Icons.search, color: Colors.black, size: 22),
                 ),

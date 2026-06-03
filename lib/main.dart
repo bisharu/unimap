@@ -9,19 +9,12 @@ import 'login.dart';
 import 'signup.dart';
 import 'package:video_player/video_player.dart';
 import 'homescreen.dart';
-import 'upload_rooms.dart'; // Import the upload script
-
   void main() async {
     WidgetsFlutterBinding.ensureInitialized();
     HttpOverrides.global = MyHttpOverrides();
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-
-    // Upload room data to Firestore in background (uncomment to sync new assets)
-    if (kDebugMode) {
-      uploadRoomsToFirestore();
-    }
 
     // 1. Tell Android to draw edge-to-edge behind system bars
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
