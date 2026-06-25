@@ -129,7 +129,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     Navigator.push(context, MaterialPageRoute(builder: (_) => const FeedbackBottomSheet()));
                   }),
                 ],
-                const Divider(height: 24, indent: 24, endIndent: 24),
                 _buildMenuItem(Icons.logout_rounded, 'Logout', 
                   color: const Color(0xFFD9534F), 
                   onTap: () async {
@@ -306,15 +305,6 @@ class _ProfilePageState extends State<ProfilePage> {
       padding: const EdgeInsets.only(bottom: 24),
       child: Column(
         children: [
-          const Text(
-            'Version 1.0.0',
-            style: TextStyle(
-              fontFamily: 'googlesans',
-              fontSize: 12,
-              color: Colors.black26,
-            ),
-          ),
-          const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(

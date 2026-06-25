@@ -217,15 +217,18 @@ class _HomeScreenState extends State<HomeScreen>
                           children: [
                             TextSpan(
                               text: 'For the most precise positioning before you navigate, please scan a nearby location QR code!.\n \n ',
+                              style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             TextSpan(
                               text: 'Note: ',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold, // Bolds only this section
-                              ),
+                                fontSize: 17,
+                               ),
                             ),
                             TextSpan(
                               text: 'Please look for QR codes positioned near staircase entrances, elevator areas, and official notice board displays.',
+                              style: TextStyle(fontSize: 17),
                             ),
                           ],
                         ),
@@ -1192,9 +1195,11 @@ class _HomeScreenState extends State<HomeScreen>
             _selectedRoomFloor = null;
             _isNavigating = false;
             _directionSteps = [];
+            _isOrientationMode = false;
             _navigationService.stopNavigation();
             _mapKey.currentState?.setRoute(null);
             _mapKey.currentState?.setHighlight(null);
+            _mapKey.currentState?.resetRotation();
           } else if (_isSearchFocused) {
             // 1. Close Search Overlay
             _isSearchFocused = false;
@@ -1206,8 +1211,10 @@ class _HomeScreenState extends State<HomeScreen>
             // 2. Exit Map Navigation (clear active route path)
             _isNavigating = false;
             _directionSteps = [];
+            _isOrientationMode = false;
             _navigationService.stopNavigation();
             _mapKey.currentState?.setRoute(null);
+            _mapKey.currentState?.resetRotation();
           } else if (_selectedRoomName != null) {
             // 3. Clear Room Selection
             _selectedRoomName = null;
@@ -1506,6 +1513,7 @@ class _HomeScreenState extends State<HomeScreen>
                             // Hide directions immediately when switching to another floor
                             _isNavigating = false;
                             _directionSteps = [];
+                            _isOrientationMode = false;
                             _selectedRoomName = null;
                             _selectedRoomNo = null;
                             _selectedRoomCentroid = null;
@@ -1514,6 +1522,7 @@ class _HomeScreenState extends State<HomeScreen>
                           _navigationService.stopNavigation();
                           _mapKey.currentState?.setRoute(null);
                           _mapKey.currentState?.setHighlight(null);
+                          _mapKey.currentState?.resetRotation();
                           _mapKey.currentState?.setFloor(val);
                         } else {
                           setState(() {
@@ -2773,9 +2782,11 @@ class _HomeScreenState extends State<HomeScreen>
                 setState(() {
                   _isNavigating = false;
                   _directionSteps = [];
+                  _isOrientationMode = false;
                 });
                 _navigationService.stopNavigation();
                 _mapKey.currentState?.setRoute(null);
+                _mapKey.currentState?.resetRotation();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFD32F2F),
@@ -3034,9 +3045,11 @@ class _HomeScreenState extends State<HomeScreen>
                           _selectedRoomFloor = null;
                           _isNavigating = false;
                           _directionSteps = [];
+                          _isOrientationMode = false;
                         });
                         _navigationService.stopNavigation();
                         _mapKey.currentState?.setRoute(null);
+                        _mapKey.currentState?.resetRotation();
                       },
                       child: Container(
                         width: 32,
@@ -3608,9 +3621,11 @@ Widget _buildSearchBar(BuildContext context) {
                         _selectedRoomFloor = null;
                         _isNavigating = false;
                         _directionSteps = [];
+                        _isOrientationMode = false;
                         _navigationService.stopNavigation();
                         _mapKey.currentState?.setRoute(null);
                         _mapKey.currentState?.setHighlight(null);
+                        _mapKey.currentState?.resetRotation();
                       });
 
                       if (didPrompt) {

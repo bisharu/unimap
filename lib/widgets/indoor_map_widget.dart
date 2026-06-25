@@ -492,7 +492,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
           }
         }
 
-        if (hasName && (showLabels || isSelected) && (!isFiltering || typeMatches || isSelected)) {
+        if (hasName && (showLabels || isSelected || typeMatches) && (!isFiltering || typeMatches || isSelected)) {
           LatLng markerPos = featureCentroid;
           if (properties['labelLat'] != null && properties['labelLng'] != null) {
             final double? mLat = double.tryParse(properties['labelLat'].toString());
@@ -1153,6 +1153,11 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
         if (geometry['type'] == 'Polygon') {
           final coords = geometry['coordinates'][0] as List;
           allMatchingPoints.addAll(coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())));
+        } else if (geometry['type'] == 'LineString') {
+          final coords = geometry['coordinates'] as List;
+          if (coords.length >= 2) {
+            allMatchingPoints.addAll(coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())));
+          }
         }
       }
     }
@@ -1164,8 +1169,14 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
       _mapController.fitCamera(
         CameraFit.bounds(
           bounds: bounds,
-          padding: const EdgeInsets.all(40), // Safe padding to see surrounding context
-          maxZoom: 21.0, // Don't zoom in too much for single rooms
+          // Safe padding to avoid overlays (like search bar at top, panels at bottom)
+          padding: const EdgeInsets.only(
+            top: 140,
+            bottom: 120,
+            left: 60,
+            right: 60,
+          ),
+          maxZoom: 20.5, // Clamps zoom level so single/clustered rooms don't zoom in excessively
         ),
       );
     }
@@ -1278,10 +1289,11 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                         },
           ),
           children: [
-            // Google Satellite map style
+            // Google Hybrid Satellite map style (Satellite + Labels)
             TileLayer(
-              urlTemplate: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+              urlTemplate: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
               userAgentPackageName: 'com.example.unimap',
+              maxNativeZoom: 20,
             ),
             
             // Indoor room polygons from GeoJSON

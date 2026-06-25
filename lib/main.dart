@@ -316,7 +316,7 @@ class _LoadingWrapperState extends State<LoadingWrapper> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: const Color(0xFF1A237E),
+        backgroundColor: Colors.white,
         body: Center(
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(begin: 0.0, end: 1.0),
