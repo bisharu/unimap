@@ -968,29 +968,6 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
     _checkForFloorTransitions();
   }
 
-  int? _getNextFloorInPath() {
-    if (_currentFullRoute == null || _currentFullRoute!.isEmpty) return null;
-    
-    // Check if the current floor has ANY points. 
-    // If we are currently NOT on the path, find the first floor that has path points.
-    bool currentFloorHasPath = _currentFullRoute!.any((p) => p.floor == _selectedFloor);
-    
-    if (!currentFloorHasPath) {
-       // Return the first floor that has path points
-       return _currentFullRoute!.first.floor;
-    }
-
-    // If we are on the current floor, find the NEXT floor in sequence
-    bool foundCurrent = false;
-    for (var point in _currentFullRoute!) {
-      if (point.floor == _selectedFloor) {
-        foundCurrent = true;
-      } else if (foundCurrent) {
-        return point.floor;
-      }
-    }
-    return null;
-  }
 
   void _checkForFloorTransitions() {
     if (mounted) {
@@ -1086,7 +1063,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
     // 2. Strict Type Match (exact or simple plural)
     if (roomType.isNotEmpty) {
-      if (roomType == query || roomType + 's' == query || query + 's' == roomType) return true;
+      if (roomType == query || '${roomType}s' == query || '${query}s' == roomType) return true;
       if (roomType.length > 4 && query.contains(roomType)) return true;
     }
 
@@ -1291,7 +1268,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
             if (widget.navigationService != null)
               ValueListenableBuilder<NavigationState?>(
                 valueListenable: widget.navigationService!.state,
-                builder: (_, navState, __) {
+                builder: (context, navState, child) {
                   if (navState == null) {
                     return PolylineLayer(polylines: _routePolylines);
                   }
@@ -1479,8 +1456,6 @@ class _UserLocationMarkerState extends State<UserLocationMarker>
 
   @override
   Widget build(BuildContext context) {
-    final double headingRad = widget.heading * (3.14159265 / 180);
-
     return SizedBox(
       width: 90,
       height: 90,
@@ -1537,38 +1512,6 @@ class _UserLocationMarkerState extends State<UserLocationMarker>
   }
 }
 
-/// Paints a translucent heading cone pointing upward (North = 0°).
-class _HeadingArrowPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-
-    final paint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          const Color(0xFF4285F4).withValues(alpha: 0.75),
-          const Color(0xFF4285F4).withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 1.0],
-        center: Alignment.center,
-        radius: 0.55,
-      ).createShader(Rect.fromCircle(center: center, radius: size.width / 2))
-      ..style = PaintingStyle.fill;
-
-    // Cone pointing upward from center
-    final path = Path()
-      ..moveTo(center.dx, center.dy - 9)
-      ..lineTo(center.dx - 15, center.dy + 12)
-      ..lineTo(center.dx, center.dy + 3)
-      ..lineTo(center.dx + 15, center.dy + 12)
-      ..close();
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BLUE DOT MARKER — route-snapped step-navigation dot
@@ -1612,7 +1555,7 @@ class _BlueDotMarkerState extends State<_BlueDotMarker>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _pulseAnimation,
-      builder: (_, __) {
+      builder: (context, child) {
         return Stack(
           alignment: Alignment.center,
           children: [

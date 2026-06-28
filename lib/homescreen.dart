@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:collection/collection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,7 +16,6 @@ import 'skeleton.dart';
 import 'filter_screen.dart';
 import 'dart:ui' as ui;
 import 'utils.dart';
-import 'utils/directions_helper.dart';
 import 'utils/indoor_positioning_service.dart';
 import 'services/navigation_service.dart';
 // AI chatbot import removed
@@ -54,8 +52,7 @@ class _HomeScreenState extends State<HomeScreen>
   final GlobalKey<IndoorMapWidgetState> _mapKey = GlobalKey<IndoorMapWidgetState>();
   final IndoorPositioningService _indoorPositioningService = IndoorPositioningService();
   StreamSubscription<IndoorPositioningUpdate>? _indoorPositioningSubscription;
-  bool _isIndoorFusionEnabled = false;
-  int _indoorStepCount = 0;
+  final bool _isIndoorFusionEnabled = false;
 
   // Animated search placeholder
   static const List<String> _searchPlaceholders = [
@@ -77,7 +74,6 @@ class _HomeScreenState extends State<HomeScreen>
   // Compass and Connectivity
   double _heading = 0;
   bool _isOffline = false;
-  List<DirectionStep> _directionSteps = [];
   bool _isOrientationMode = false; // Tracks if compass/orientation mode is active
   LatLng? _lastOrientationLocation; // For tracking movement in orientation mode
   double _lastHeading = 0; // Previous heading to detect changes
@@ -770,41 +766,6 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  void _toggleIndoorFusion() {
-    if (_isIndoorFusionEnabled) {
-      _indoorPositioningSubscription?.cancel();
-      _indoorPositioningService.stop();
-      setState(() {
-        _isIndoorFusionEnabled = false;
-        _indoorStepCount = 0;
-      });
-      _showLocationSnackbar('Indoor fusion disabled.');
-      return;
-    }
-
-    if (_currentLocation == null) {
-      _showLocationSnackbar('Anchor your location first before activating indoor fusion.');
-      return;
-    }
-
-    _indoorPositioningSubscription?.cancel();
-    _indoorPositioningService.setAnchor(_currentLocation!);
-    _indoorPositioningService.start(anchorLocation: _currentLocation!);
-    _indoorPositioningSubscription = _indoorPositioningService.updates.listen((update) {
-      if (!mounted) return;
-      setState(() {
-        _indoorStepCount = update.stepCount;
-        _heading = update.heading;
-        _currentLocation = update.estimatedLocation;
-      });
-      _mapKey.currentState?.moveToLocation(update.estimatedLocation, zoom: 19.0);
-    });
-
-    setState(() {
-      _isIndoorFusionEnabled = true;
-    });
-    _showLocationSnackbar('Indoor fusion enabled. Step-based position tracking started.');
-  }
 
   void _showLocationSnackbar(String message) {
     if (_isOffline) return;
@@ -1195,7 +1156,6 @@ class _HomeScreenState extends State<HomeScreen>
             _selectedRoomCentroid = null;
             _selectedRoomFloor = null;
             _isNavigating = false;
-            _directionSteps = [];
             _isOrientationMode = false;
             _navigationService.stopNavigation();
             _mapKey.currentState?.setRoute(null);
@@ -1211,7 +1171,6 @@ class _HomeScreenState extends State<HomeScreen>
           } else if (_isNavigating) {
             // 2. Exit Map Navigation (clear active route path)
             _isNavigating = false;
-            _directionSteps = [];
             _isOrientationMode = false;
             _navigationService.stopNavigation();
             _mapKey.currentState?.setRoute(null);
@@ -1279,14 +1238,9 @@ class _HomeScreenState extends State<HomeScreen>
                     _selectedRoomCentroid = centroid;
                     _selectedRoomFloor = floor;
                     _isNavigating = false; 
-                    _directionSteps = [];
                   });
                 },
                 onRouteCalculated: (path) {
-                  final nodes = _mapKey.currentState?.globalNodes ?? [];
-                  setState(() {
-                    _directionSteps = DirectionsHelper.generateDirections(path, nodes);
-                  });
                   // Start step-based blue dot navigation
                   if (_currentLocation != null) {
                     final flatRoute = path
@@ -1514,7 +1468,6 @@ class _HomeScreenState extends State<HomeScreen>
                             
                             // Hide directions immediately when switching to another floor
                             _isNavigating = false;
-                            _directionSteps = [];
                             _isOrientationMode = false;
                             _selectedRoomName = null;
                             _selectedRoomNo = null;
@@ -2210,60 +2163,6 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _seedFacultyCabins() async {
-    // A secure, structured map of Assam Don Bosco University faculty details keyed by cabin room number
-    final Map<int, Map<String, String>> facultySeedData = {
-      117: {
-        'name': 'Dr. Pranab Das',
-        'designation': 'Associate Professor & HOD',
-        'dept': 'Dept. of Computer Science & Engineering',
-        'email': 'pranab.das@dbuniversity.ac.in',
-      },
-      118: {
-        'name': 'Prof. Sonia Sharma',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Computer Science & Engineering',
-        'email': 'sonia.sharma@dbuniversity.ac.in',
-      },
-      119: {
-        'name': 'Dr. Amit Barua',
-        'designation': 'Associate Professor',
-        'dept': 'Dept. of Electrical & Electronics',
-        'email': 'amit.barua@dbuniversity.ac.in',
-      },
-      120: {
-        'name': 'Prof. Sonia Sen',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Electronics & Communications',
-        'email': 'sonia.sen@dbuniversity.ac.in',
-      },
-      121: {
-        'name': 'Dr. Manas Jyoti',
-        'designation': 'Professor',
-        'dept': 'Dept. of Civil Engineering',
-        'email': 'manas.jyoti@dbuniversity.ac.in',
-      },
-      122: {
-        'name': 'Prof. Rishabh Dev',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Information Technology',
-        'email': 'rishabh.dev@dbuniversity.ac.in',
-      },
-      217: {
-        'name': 'Dr. Bobby Sharma',
-        'designation': 'Associate Professor',
-        'dept': 'Dept. of Computer Science & Engineering',
-        'email': 'bobby.sharma@dbuniversity.ac.in',
-      },
-      218: {
-        'name': 'Prof. Gyani Sharma',
-        'designation': 'Assistant Professor',
-        'dept': 'Dept. of Computer Applications',
-        'email': 'gyani.sharma@dbuniversity.ac.in',
-      },
-      219: {
-        'name': 'Prof. Vijay Prasad',
-      }
-    };
     // Deprecated logic
     return;
   }
@@ -2334,136 +2233,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) {
       setState(() => _isGuestBlocked = !allowed);
     }
-  }
-
-  void _showAllStepsBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.75,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            children: [
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 12),
-                  width: 40,
-                  height: 4.5,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Text(
-                  'Route Directions',
-                  style: TextStyle(
-                    fontFamily: 'googlesans',
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-              ),
-              const Divider(),
-              Expanded(
-                child: _directionSteps.isEmpty
-                    ? const Center(child: Text("Calculating route directions..."))
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                        itemCount: _directionSteps.length,
-                        itemBuilder: (context, index) {
-                          final step = _directionSteps[index];
-                          final isLast = index == _directionSteps.length - 1;
-                          final isFirst = index == 0;
-                          return IntrinsicHeight(
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Column(
-                                  children: [
-                                    Container(
-                                      width: 32,
-                                      height: 32,
-                                      decoration: BoxDecoration(
-                                        color: isFirst 
-                                            ? const Color(0xFF6C63FF).withValues(alpha: 0.1) 
-                                            : isLast 
-                                                ? Colors.green.withValues(alpha: 0.1)
-                                                : Colors.grey[100],
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Icon(
-                                        step.icon, 
-                                        color: isFirst 
-                                            ? const Color(0xFF6C63FF) 
-                                            : isLast 
-                                                ? Colors.green 
-                                                : Colors.black54, 
-                                        size: 18
-                                      ),
-                                    ),
-                                    if (!isLast)
-                                      Expanded(
-                                        child: VerticalDivider(
-                                          color: Colors.grey[300],
-                                          thickness: 2,
-                                          width: 32,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 24),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          step.instruction,
-                                          style: TextStyle(
-                                            fontFamily: 'googlesans',
-                                            fontSize: 15,
-                                            fontWeight: (isFirst || isLast) ? FontWeight.bold : FontWeight.w500,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        if (step.distance > 0) ...[
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'For ${step.distance.round()} m',
-                                            style: const TextStyle(
-                                              fontFamily: 'googlesans',
-                                              fontSize: 12,
-                                              color: Colors.black45,
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
   }
 
   void _startNavigation({required bool enableCompass}) {
@@ -2561,7 +2330,7 @@ class _HomeScreenState extends State<HomeScreen>
               padding: const EdgeInsets.only(right: 16, bottom: 10),
               child: ValueListenableBuilder<NavigationState?>(
                 valueListenable: _navigationService.state,
-                builder: (_, navState, __) {
+                builder: (context, navState, child) {
                   // Show arrival snackbar when arrived
                   if (navState?.hasArrived == true && !_hasShownArrivalSnackBar) {
                     _hasShownArrivalSnackBar = true;
@@ -2813,7 +2582,6 @@ class _HomeScreenState extends State<HomeScreen>
               onPressed: () {
                 setState(() {
                   _isNavigating = false;
-                  _directionSteps = [];
                   _isOrientationMode = false;
                 });
                 _navigationService.stopNavigation();
@@ -2859,10 +2627,15 @@ class _HomeScreenState extends State<HomeScreen>
       child: Builder(
         builder: (context) {
           String floorDocId = 'GroundFloor';
-          if (_selectedRoomFloor == 1) floorDocId = 'FirstFloor';
-          else if (_selectedRoomFloor == 2) floorDocId = 'SecondFloor';
-          else if (_selectedRoomFloor == 3) floorDocId = 'ThirdFloor';
-          else if (_selectedRoomFloor == 4) floorDocId = 'FourthFloor';
+          if (_selectedRoomFloor == 1) {
+            floorDocId = 'FirstFloor';
+          } else if (_selectedRoomFloor == 2) {
+            floorDocId = 'SecondFloor';
+          } else if (_selectedRoomFloor == 3) {
+            floorDocId = 'ThirdFloor';
+          } else if (_selectedRoomFloor == 4) {
+            floorDocId = 'FourthFloor';
+          }
 
           return StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
@@ -2893,10 +2666,15 @@ class _HomeScreenState extends State<HomeScreen>
 
             // Build the Firestore document ID from floor prefix + room number (e.g. "GF006")
             String floorPrefix = 'GF';
-            if (_selectedRoomFloor == 1) floorPrefix = 'FF';
-            else if (_selectedRoomFloor == 2) floorPrefix = 'SF';
-            else if (_selectedRoomFloor == 3) floorPrefix = 'TF';
-            else if (_selectedRoomFloor == 4) floorPrefix = 'FoF';
+            if (_selectedRoomFloor == 1) {
+              floorPrefix = 'FF';
+            } else if (_selectedRoomFloor == 2) {
+              floorPrefix = 'SF';
+            } else if (_selectedRoomFloor == 3) {
+              floorPrefix = 'TF';
+            } else if (_selectedRoomFloor == 4) {
+              floorPrefix = 'FoF';
+            }
 
             QueryDocumentSnapshot? targetDoc;
 
@@ -3076,7 +2854,6 @@ class _HomeScreenState extends State<HomeScreen>
                           _selectedRoomCentroid = null;
                           _selectedRoomFloor = null;
                           _isNavigating = false;
-                          _directionSteps = [];
                           _isOrientationMode = false;
                         });
                         _navigationService.stopNavigation();
@@ -3653,7 +3430,6 @@ Widget _buildSearchBar(BuildContext context) {
                         _selectedRoomCentroid = null;
                         _selectedRoomFloor = null;
                         _isNavigating = false;
-                        _directionSteps = [];
                         _isOrientationMode = false;
                         _navigationService.stopNavigation();
                         _mapKey.currentState?.setRoute(null);
@@ -3765,65 +3541,6 @@ Widget _buildSearchBar(BuildContext context) {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildIndoorFusionButton() {
-    return GestureDetector(
-      onTap: _toggleIndoorFusion,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-          color: _isIndoorFusionEnabled ? const Color(0xFF1E8E3E) : Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.14),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          border: Border.all(
-            color: _isIndoorFusionEnabled ? const Color(0xFF0F6A26) : Colors.black12,
-            width: 1.5,
-          ),
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Icon(
-              _isIndoorFusionEnabled ? Icons.track_changes_rounded : Icons.explore_rounded,
-              color: _isIndoorFusionEnabled ? Colors.white : Colors.blue,
-              size: 24,
-            ),
-            if (_isIndoorFusionEnabled && _indoorStepCount > 0)
-              Positioned(
-                top: 6,
-                right: 6,
-                child: Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1.2),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '$_indoorStepCount',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
       ),
     );
   }

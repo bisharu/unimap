@@ -189,15 +189,11 @@ class AStarRouter {
 
     var startNode = _nearestOnFloor(
         LatLng(start.latitude, start.longitude), start.floor, excludeTransitions: true);
-    if (startNode == null) {
-      startNode = _nearestOnFloor(LatLng(start.latitude, start.longitude), start.floor);
-    }
+    startNode ??= _nearestOnFloor(LatLng(start.latitude, start.longitude), start.floor);
         
     var endNode = _nearestOnFloor(
         LatLng(end.latitude, end.longitude), end.floor, excludeTransitions: true);
-    if (endNode == null) {
-      endNode = _nearestOnFloor(LatLng(end.latitude, end.longitude), end.floor);
-    }
+    endNode ??= _nearestOnFloor(LatLng(end.latitude, end.longitude), end.floor);
 
     if (startNode == null || endNode == null) return null;
     if (startNode == endNode) return [startNode.navPoint];

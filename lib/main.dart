@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
@@ -249,7 +248,7 @@ import 'homescreen.dart';
           borderRadius: BorderRadius.circular(15),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF8B47FA).withOpacity(0.4), // Purple glow
+              color: const Color(0xFF8B47FA).withValues(alpha: 0.4), // Purple glow
               blurRadius: 25,
               spreadRadius: 2,
               offset: const Offset(0, 5),

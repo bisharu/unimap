@@ -53,10 +53,8 @@ class _LoginState extends State<Login> {
 
     try {
       // If the caller is not authenticated, temporarily sign in anonymously to satisfy Firestore security rules
-      bool wasTempAnonymous = false;
       if (FirebaseAuth.instance.currentUser == null) {
         await FirebaseAuth.instance.signInAnonymously();
-        wasTempAnonymous = true;
       }
 
       String? realEmail;
