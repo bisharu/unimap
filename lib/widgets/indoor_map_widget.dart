@@ -1197,6 +1197,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
   void _handleMapTap(LatLng point) {
     String? tappedRoomName;
     LatLng? tappedCentroid;
+    String? tappedRoomNo;
     final geoJson = _geoJsonCache[_selectedFloor];
 
     if (geoJson != null) {
@@ -1219,6 +1220,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
         if (featurePoints.isNotEmpty && _isPointInPolygon(point, featurePoints)) {
           tappedRoomName = name;
+          tappedRoomNo = rawRoomNo;
           tappedCentroid = _calculateCentroid(featurePoints);
           break;
         }
@@ -1243,25 +1245,7 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
 
       // Notify parent after selection is fully resolved
       if (tappedRoomName != null && tappedCentroid != null && widget.onRoomSelected != null) {
-        // Also pass along the raw room number from GeoJSON so the detail panel can
-        // do a reliable Firestore document-ID lookup (e.g. "GF006") instead of name matching
-        String rawRoomNo = '';
-        final features = geoJson?['features'] as List<dynamic>?;
-        if (features != null) {
-          final tappedFeature = features.firstWhere(
-            (f) {
-              final props = f['properties'] as Map<String, dynamic>?;
-              if (props == null) return false;
-              return (props['name'] ?? '').toString() == tappedRoomName ||
-                     (props['roomNo'] ?? '').toString().trim() == tappedRoomName;
-            },
-            orElse: () => null,
-          );
-          if (tappedFeature != null) {
-            rawRoomNo = (tappedFeature['properties']['roomNo'] ?? '').toString().trim();
-          }
-        }
-        widget.onRoomSelected!(tappedRoomName, tappedCentroid, rawRoomNo, _selectedFloor);
+        widget.onRoomSelected!(tappedRoomName, tappedCentroid, tappedRoomNo ?? '', _selectedFloor);
       }
     }
   }
@@ -1372,31 +1356,50 @@ class IndoorMapWidgetState extends State<IndoorMapWidget> with TickerProviderSta
                 markers: [
                   Marker(
                     point: _buildingCenter,
-                    width: 200,
+                    width: 260,
                     height: 100,
                     child: Column(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                           decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF1E3A5F), Color(0xFF5B5FEF)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(24),
                             boxShadow: [
-                              BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4),
+                              BoxShadow(
+                                color: const Color(0xFF5B5FEF).withValues(alpha: 0.4),
+                                blurRadius: 12,
+                                offset: const Offset(0, 6),
+                              ),
                             ],
-                            border: Border.all(color: const Color(0xFF1E3A5F), width: 1),
-                          ),
-                          child: const Text(
-                            "Assam Don Bosco University",
-                            style: TextStyle(
-                              fontFamily: 'googlesans',
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: Color(0xFF1E3A5F),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.2), 
+                              width: 1.5,
                             ),
                           ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.school_rounded, color: Colors.white, size: 16),
+                              SizedBox(width: 6),
+                              Text(
+                                "Assam Don Bosco University",
+                                style: TextStyle(
+                                  fontFamily: 'googlesans',
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                  color: Colors.white,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        const Icon(Icons.arrow_drop_down, color: Color(0xFF1E3A5F), size: 30),
+                        const Icon(Icons.arrow_drop_down, color: Color(0xFF5B5FEF), size: 30),
                       ],
                     ),
                   ),

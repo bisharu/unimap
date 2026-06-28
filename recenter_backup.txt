@@ -1,0 +1,26 @@
+// --- BACKUP OF RECENTER BUTTON ---
+
+// 1. From lib/homescreen.dart (UI component)
+// This was inside the builder of ValueListenableBuilder in _buildDirectionsPanel:
+/*
+                  return FloatingActionButton.small(
+                    heroTag: 'recenter_btn',
+                    onPressed: _navigationService.recenter,
+                    backgroundColor: Colors.white,
+                    elevation: 3,
+                    shape: const CircleBorder(),
+                    child: const Icon(Icons.my_location_rounded,
+                        color: Color(0xFF5B5FEF), size: 22),
+                  );
+*/
+
+// 2. From lib/services/navigation_service.dart (Logic component)
+// This was a method in the NavigationService class:
+/*
+  /// Snaps the dot back to the last QR anchor position.
+  void recenter() {
+    final current = state.value;
+    if (current?.lastAnchor == null || _fullRoute.isEmpty) return;
+    applyQrAnchor(current!.lastAnchor!);
+  }
+*/

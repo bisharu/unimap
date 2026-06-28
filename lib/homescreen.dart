@@ -1191,6 +1191,7 @@ class _HomeScreenState extends State<HomeScreen>
             _searchController.clear();
             _searchQuery = '';
             _selectedRoomName = null;
+            _selectedRoomNo = null;
             _selectedRoomCentroid = null;
             _selectedRoomFloor = null;
             _isNavigating = false;
@@ -1218,6 +1219,7 @@ class _HomeScreenState extends State<HomeScreen>
           } else if (_selectedRoomName != null) {
             // 3. Clear Room Selection
             _selectedRoomName = null;
+            _selectedRoomNo = null;
             _selectedRoomCentroid = null;
             _searchQuery = '';
             _searchController.clear();
@@ -2190,6 +2192,7 @@ class _HomeScreenState extends State<HomeScreen>
             _searchQuery = room.name; // Keep the selected room name in the bar
             _searchController.text = room.name;
             _selectedRoomName = room.name;
+            _selectedRoomNo = room.roomNo;
             _selectedRoomCentroid = room.centroid;
             _selectedRoomFloor = room.floor;
             _selectedFloor = room.floor; // Update the floor selector
@@ -2507,6 +2510,43 @@ class _HomeScreenState extends State<HomeScreen>
       _selectedRoomCentroid!,
       destinationFloor: _selectedRoomFloor,
     );
+    
+    _showRecenterCoachMarkIfNeeded();
+  }
+
+  Future<void> _showRecenterCoachMarkIfNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasShown = prefs.getBool('has_shown_recenter_coach_mark') ?? false;
+    
+    if (!hasShown && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.info_outline_rounded, color: Colors.white),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Location drifting? Walk back to your last scanned QR code and tap the recenter button to fix your position.',
+                  style: TextStyle(fontFamily: 'googlesans', fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF6C63FF),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'GOT IT',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+      await prefs.setBool('has_shown_recenter_coach_mark', true);
+    }
   }
 
   Widget _buildDirectionsPanel() {
@@ -2547,15 +2587,7 @@ class _HomeScreenState extends State<HomeScreen>
                       }
                     });
                   }
-                  return FloatingActionButton.small(
-                    heroTag: 'recenter_btn',
-                    onPressed: _navigationService.recenter,
-                    backgroundColor: Colors.white,
-                    elevation: 3,
-                    shape: const CircleBorder(),
-                    child: const Icon(Icons.my_location_rounded,
-                        color: Color(0xFF5B5FEF), size: 22),
-                  );
+                  return const SizedBox.shrink();
                 },
               ),
             ),
@@ -2729,7 +2761,7 @@ class _HomeScreenState extends State<HomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      UniUtils.toTitleCase(_selectedRoomName ?? ''),
+                      'To: ${UniUtils.toTitleCase(_selectedRoomName ?? '')}',
                       style: const TextStyle(
                         fontFamily: 'googlesans',
                         fontSize: 15,
@@ -3617,6 +3649,7 @@ Widget _buildSearchBar(BuildContext context) {
                         _searchController.clear();
                         _searchQuery = '';
                         _selectedRoomName = null;
+                        _selectedRoomNo = null;
                         _selectedRoomCentroid = null;
                         _selectedRoomFloor = null;
                         _isNavigating = false;
@@ -4043,6 +4076,7 @@ Widget _buildSearchBar(BuildContext context) {
         _searchQuery = nearestFacility!.name;
         _searchController.text = nearestFacility.name;
         _selectedRoomName = nearestFacility.name;
+        _selectedRoomNo = nearestFacility.roomNo;
         _selectedRoomCentroid = nearestFacility.centroid;
         _selectedRoomFloor = nearestFacility.floor;
         _isNavigating = true;
@@ -4363,12 +4397,12 @@ class _AnimatedRotatingBorderState extends State<AnimatedRotatingBorder> with Si
       animation: _controller,
       builder: (context, child) {
         return Container(
-          padding: const EdgeInsets.all(2.0),
+          padding: const EdgeInsets.all(2.5),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(widget.borderRadius),
             gradient: SweepGradient(
-              colors: const [Colors.green, Colors.red, Colors.blue, Colors.green],
-              stops: const [0.0, 0.33, 0.66, 1.0],
+              colors: const [Color(0xFF87CEEB), Colors.white, Color(0xFF87CEEB), Colors.white, Color(0xFF87CEEB)],
+              stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
               transform: GradientRotation(_controller.value * 2 * 3.1415926535),
             ),
           ),

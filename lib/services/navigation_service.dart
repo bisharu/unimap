@@ -108,9 +108,16 @@ class NavigationService {
   /// Snaps [startPosition] to the nearest point on the polyline automatically.
   void startNavigation(List<LatLng> routePolyline, LatLng startPosition) {
     if (routePolyline.length < 2) return;
+    
+    // Prepend the actual user position so the route starts exactly where they are.
+    // This stops the blue dot from "jumping" to the nearest pre-defined graph node.
+    if (routePolyline.first != startPosition) {
+      routePolyline.insert(0, startPosition);
+    }
+    
     _fullRoute = routePolyline;
 
-    // Snap start position to polyline
+    // Snap start position to polyline (will now perfectly snap to 0 distance)
     final snap = pu.nearestOnPolyline(startPosition, _fullRoute);
     _distanceWalkedM = snap.distAlongLine;
 
@@ -129,12 +136,7 @@ class NavigationService {
     _emitState(anchor: qrPosition);
   }
 
-  /// Snaps the dot back to the last QR anchor position.
-  void recenter() {
-    final current = state.value;
-    if (current?.lastAnchor == null || _fullRoute.isEmpty) return;
-    applyQrAnchor(current!.lastAnchor!);
-  }
+
 
   /// Stops all sensors and clears state.
   void stopNavigation() {
@@ -222,6 +224,22 @@ class NavigationService {
         final segBearing =
             pu.bearingBetween(_fullRoute[i], _fullRoute[i + 1]);
         final diff = ((_heading - segBearing + 540) % 360) - 180;
+        
+        // Look-ahead Proximity Waypoint Check (Radius of Acceptance)
+        final double distanceToSegmentEnd = segLen - remaining;
+        if (distanceToSegmentEnd < 2.5 && i < _fullRoute.length - 2) {
+          final nextSegBearing =
+              pu.bearingBetween(_fullRoute[i + 1], _fullRoute[i + 2]);
+          final nextDiff = ((_heading - nextSegBearing + 540) % 360) - 180;
+          
+          // If they are facing the direction of the next leg, they are cutting the corner.
+          if (nextDiff.abs() <= headingToleranceDeg) {
+            // Automatically snap their progress to the start of the next segment!
+            _distanceWalkedM += distanceToSegmentEnd;
+            return true;
+          }
+        }
+
         return diff.abs() <= headingToleranceDeg;
       }
       remaining -= segLen;
